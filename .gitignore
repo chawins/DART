@@ -1,6 +1,7 @@
 keras_weights/
 input_data/
 *.pyc
+.ipynb_checkpoints/
 
 # OS generated files #
 ######################
