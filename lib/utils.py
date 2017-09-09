@@ -2,7 +2,132 @@ from scipy import ndimage as ndi
 from skimage.feature import canny
 
 from parameters import *
-from traffic_sign.keras_utils import *
+from lib.keras_utils import *
+
+# Threshold for checking mask area
+MASK_THRES_MIN = 0.1
+MASK_THRES_MAX = 0.9
+
+
+def rgb2gray(image):
+    """Convert 3-channel RGB image into grayscale"""
+    return (0.299 * image[:, :, 0] + 0.587 * image[:, :, 1] +
+            0.114 * image[:, :, 2])
+
+
+def read_image(im_name):
+    """Read a single image into numpy array"""
+    return misc.imread(im_name, flatten=False, mode='RGB')
+
+
+def read_images(path, resize=False, interp='bilinear'):
+    """
+    Read all image files in a directory, resize to 32 x 32 pixels if
+    specified. Return array of images with same format as read from
+    load_dataset(). Chosen interpolation algorithm may affect the result
+    (default: bilinear). Images are scaled to [0, 1]
+    """
+
+    imgs = []
+    valid_images = [".jpg", ".gif", ".png", ".tga", ".jpeg"]
+    for f in sorted(os.listdir(path)):
+        ext = os.path.splitext(f)[1]
+        if ext.lower() not in valid_images:
+            continue
+        im = read_image(os.path.join(path, f))
+        if resize:
+            im = misc.imresize(im, (32, 32), interp=interp)
+        im = (im / 255.).astype(np.float32)
+        imgs.append(im)
+    return np.array(imgs)
+
+
+def read_labels(path):
+    """Read labels to a list"""
+
+    with open(path) as f:
+        content = f.readlines()
+    content = [int(x.strip()) for x in content]
+    return content
+
+
+def resize(image, interp='bilinear'):
+    """Resize to IMAGE_SIZE and rescale to [0, 1]"""
+
+    img = misc.imresize(image, IMAGE_SIZE, interp=interp)
+    img = (img / 255.).astype(np.float32)
+    return img
+
+
+def resize_all(images, interp='bilinear'):
+    """Resize all images to IMAGE_SIZE"""
+
+    if images[0].ndim == 3:
+        shape = (len(images),) + IMAGE_SIZE + (N_CHANNEL,)
+    else:
+        shape = (len(images),) + IMAGE_SIZE
+    images_rs = np.zeros(shape)
+    for i, image in enumerate(images):
+        images_rs[i] = resize(image, interp=interp)
+    return images_rs
+
+
+def check_mask(mask):
+    """Check if mask is valid by its area"""
+
+    area_ratio = np.sum(mask) / float(mask.shape[0] * mask.shape[1])
+    return (area_ratio > MASK_THRES_MIN) and (area_ratio < MASK_THRES_MAX)
+
+
+def load_samples(img_dir, label_path):
+    """Load sample images, resize and find masks"""
+
+    # Load images and labels
+    images = read_images(img_dir)
+    labels = read_labels(label_path)
+
+    ex_ind = []
+    masks_full = []
+
+    for i, image in enumerate(images):
+        # Find sign area from full-sized image
+        mask = find_sign_area(rgb2gray(image))
+        # Keep only valid mask
+        if check_mask(mask):
+            masks_full.append(mask)
+        else:
+            ex_ind.append(i)
+
+    # Resize mask to IMAGE_SIZE
+    masks = resize_all(masks_full, interp='nearest')
+
+    # Exclude images that don't produce valid mask
+    x_ben_full = np.delete(images, ex_ind, axis=0)
+    y_ben = np.delete(labels, ex_ind, axis=0)
+
+    # Resize images
+    x_ben = resize_all(x_ben_full, interp='bilinear')
+
+    # One-hot encode labels
+    y_ben = keras.utils.to_categorical(y_ben, NUM_LABELS)
+
+    return x_ben, x_ben_full, y_ben, masks, masks_full
+
+
+def softmax(x):
+    """
+    Compute softmax values for each sets of scores in x.
+    Ref: https://stackoverflow.com/questions/34968722/softmax-function-python
+    """
+    e_x = np.exp(x - np.max(x))
+    return e_x / e_x.sum(axis=0)
+
+
+def to_class(y):
+    """
+    Convert categorical (one-hot) to classes. Also works with softmax output
+    """
+    return np.argmax(y, axis=1)
 
 
 def load_dataset_GTSRB(n_channel=3):
@@ -64,22 +189,6 @@ def load_dataset_GTSRB(n_channel=3):
     return x_train, y_train, x_val, y_val, x_test, y_test
 
 
-def softmax(x):
-    """
-    Compute softmax values for each sets of scores in x.
-    Ref: https://stackoverflow.com/questions/34968722/softmax-function-python
-    """
-    e_x = np.exp(x - np.max(x))
-    return e_x / e_x.sum(axis=0)
-
-
-def to_class(y):
-    """
-    Convert categorical (one-hot) to classes. Also works with softmax output
-    """
-    return np.argmax(y, axis=1)
-
-
 def filter_samples(model, x, y, y_target=None):
     """
     Returns samples and their corresponding labels that are correctly classified 
@@ -112,7 +221,8 @@ def filter_samples(model, x, y, y_target=None):
         y_tg = to_class(y_target)
         del_id = np.concatenate((del_id, np.array(np.where(y_ == y_tg))[0]))
 
-    return np.delete(x, del_id, axis=0), np.delete(y, del_id, axis=0)
+    del_id = np.sort(np.unique(del_id))
+    return np.delete(x, del_id, axis=0), np.delete(y, del_id, axis=0), del_id
 
 
 def eval_adv(model, x_adv, y, target=True):
@@ -176,7 +286,7 @@ def find_sign_area(image, sigma=1):
     sizes = np.bincount(label_objects.ravel())
     mask_sizes = np.zeros_like(sizes)
     sizes[0] = 0
-    mask_sizes[np.argmax(sizes)] = 1
+    mask_sizes[np.argmax(sizes)] = 1.
     cleaned = mask_sizes[label_objects]
 
     return cleaned
@@ -223,7 +333,8 @@ def fg(model, x, y, mag_list, target=True, mask=None):
 
         # Apply mask
         if mask is not None:
-            grad *= mask[i]
+            mask_rep = np.repeat(mask[i, :, :, np.newaxis], N_CHANNEL, axis=2)
+            grad *= mask_rep
 
         # Normalize gradient
         try:
@@ -282,12 +393,21 @@ def iterative(model, x, y, n_step=20, step_size=0.05, target=True, mask=None):
     for i, x_in in enumerate(x):
 
         x_cur = np.copy(x_in)
+        # Get mask with the same shape as gradient
+        if mask is not None:
+            mask_rep = np.repeat(mask[i, :, :, np.newaxis], N_CHANNEL, axis=2)
+        # Start update in steps
         for _ in range(n_step):
             if target is not None:
                 grad = -1 * gradient_input(grad_fn, x_cur, y[i])
             else:
                 grad = gradient_input(grad_fn, x_cur, y[i])
-            # Normalize gradient with RMSD
+
+            # Apply mask
+            if mask is not None:
+                grad *= mask_rep
+
+            # Normalize gradient
             try:
                 grad /= np.linalg.norm(grad)
             except ZeroDivisionError:

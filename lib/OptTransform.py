@@ -1,5 +1,5 @@
 from parameters import *
-from traffic_sign.RandomTransform import *
+from lib.RandomTransform import *
 
 
 class OptTransform:

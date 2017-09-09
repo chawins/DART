@@ -1,6 +1,6 @@
 from parameters import *
-from traffic_sign.keras_utils import *
-from traffic_sign.utils import *
+from lib.keras_utils import *
+from lib.utils import *
 
 
 EPS = 1e-10   # Epsilon
@@ -30,11 +30,12 @@ class OptCarlini:
             self.opt = self.optimizer.minimize(self.f, var_list=self.var_list)
 
     def __init__(self, model, target=True, c=10, lr=0.01, init_scl=0.2,
-                 use_bound=False, loss_op=0, k=10, var_change=True):
+                 use_bound=False, loss_op=0, k=10, var_change=True, use_mask=True):
 
         self.target = target
         self.lr = lr
         self.use_bound = use_bound
+        self.use_mask = use_mask
         self.model = model
         self.k = k
         self.c = c
@@ -44,18 +45,25 @@ class OptCarlini:
         # init_val = np.random.uniform(high=scale, low=-scale, size=((1,) + INPUT_SHAPE))
         self.x = K.placeholder(dtype='float32', shape=((1,) + INPUT_SHAPE))
         self.y = K.placeholder(dtype='float32', shape=(1, OUTPUT_DIM))
+        if self.use_mask:
+            self.m = K.placeholder(dtype='float32', shape=((1,) + INPUT_SHAPE))
         # If change of variable is specified
         if var_change:
             # Optimize on w instead of d
             self.w = tf.Variable(initial_value=init_val, trainable=True,
                                  dtype=tf.float32)
-            self.x_in = (0.5 + EPS) * (tf.tanh(self.w) + 1)
-            self.d = self.x_in - self.x
+            x_full = (0.5 + EPS) * (tf.tanh(self.w) + 1)
+            self.d = x_full - self.x
+            if self.use_mask:
+                self.d = tf.multiply(self.d, self.m)
+            self.x_in = self.x + self.d
             self.var_list = [self.w]
         else:
             # Optimize directly on d (perturbation)
             self.d = tf.Variable(initial_value=init_val, trainable=True,
                                  dtype=tf.float32)
+            if self.use_mask:
+                self.d = tf.multiply(self.d, self.m)
             self.x_in = self.x + self.d
             self.var_list = [self.d]
 
@@ -90,7 +98,7 @@ class OptCarlini:
         self.norm = tf.norm(self.d, ord='euclidean')
         self._setup_opt()
 
-    def optimize(self, x, y, n_step=1000, prog=True):
+    def optimize(self, x, y, n_step=1000, prog=True, mask=None):
         """
         Run optimization attack, produce adversarial example from a single 
         sample, x.
@@ -106,6 +114,8 @@ class OptCarlini:
                  Number of steps to run optimization
         prog   : (optional) bool
                  True if progress should be printed
+        mask   : (optional) np.array of 0 or 1, shape=(n_sample, height, width)
+                 Mask to restrict gradient update on valid pixels
 
         Returns
         -------
@@ -120,7 +130,13 @@ class OptCarlini:
             # Ensure that shape is correct
             x_ = np.copy(x).reshape((1,) + INPUT_SHAPE)
             y_ = np.copy(y).reshape((1, OUTPUT_DIM))
-            feed_dict = {self.x: x_, self.y: y_, K.learning_phase(): False}
+            if self.use_mask:
+                m_ = np.repeat(
+                    mask[np.newaxis, :, :, np.newaxis], N_CHANNEL, axis=3)
+                feed_dict = {self.x: x_, self.y: y_,
+                             self.m: m_, K.learning_phase(): False}
+            else:
+                feed_dict = {self.x: x_, self.y: y_, K.learning_phase(): False}
 
             # Start optimization
             for step in range(n_step):
@@ -145,7 +161,8 @@ class OptCarlini:
                     step + 1, norm, loss, f)
             return x_adv, norm
 
-    def optimize_search(self, x, y, n_step=1000, search_step=10, prog=True):
+    def optimize_search(self, x, y, n_step=1000, search_step=10, prog=True,
+                        mask=None):
         """
         Run optimization attack, produce adversarial example from a single 
         sample, x. Does binary search on log_10(c) to find optimal value of c.
@@ -163,6 +180,8 @@ class OptCarlini:
                       Number of steps to search on c
         prog   : (optional) bool
                  True if progress should be printed
+        mask   : (optional) np.array of 0 or 1, shape=(n_sample, height, width)
+                 Mask to restrict gradient update on valid pixels
 
         Returns
         -------
@@ -189,7 +208,8 @@ class OptCarlini:
             self._setup_opt()
 
             # Run optimization with new c
-            x_adv, norm = self.optimize(x, y, n_step=n_step, prog=False)
+            x_adv, norm = self.optimize(
+                x, y, n_step=n_step, prog=False, mask=mask)
 
             # Evaluate result
             y_pred = self.model.predict(x_adv.reshape((1,) + INPUT_SHAPE))[0]
