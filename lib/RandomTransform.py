@@ -10,7 +10,7 @@ class RandomTransform():
     http://navoshta.com/traffic-signs-classification/
     """
 
-    def __init__(self, seed=1234, p=1.0, intensity=0.5):
+    def __init__(self, seed=None, p=1.0, intensity=0.5):
         """
         Initialises an instance.
 
@@ -25,11 +25,12 @@ class RandomTransform():
                     Augmentation intensity, should be in a [0, 1] range.
         """
 
-        self.seed = seed
         self.p = p
         self.intensity = intensity
         self.random = random.Random()
-        self.random.seed(seed)
+        if seed is not None:
+            self.seed = seed
+            self.random.seed(seed)
 
     def transform(self, image, order=1):
         """
