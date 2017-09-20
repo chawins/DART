@@ -130,7 +130,7 @@ def to_class(y):
     return np.argmax(y, axis=1)
 
 
-def load_dataset_GTSRB(n_channel=3):
+def load_dataset_GTSRB(n_channel=3, train_file_name=None):
     """
     Load GTSRB data as a (datasize) x (channels) x (height) x (width) numpy
     matrix. Each pixel is rescaled to lie in [0,1].
@@ -175,15 +175,20 @@ def load_dataset_GTSRB(n_channel=3):
         return x
 
     # Load pickle dataset
-    x_train, y_train = load_pickled_data(
-        DATA_DIR + 'train.p', ['features', 'labels'])
+    if train_file_name is None:
+        x_train, y_train = load_pickled_data(
+            DATA_DIR + 'train.p', ['features', 'labels'])
+        x_train = preprocess(x_train, n_channel)
+    else:
+        x_train, y_train = load_pickled_data(
+            DATA_DIR + train_file_name, ['features', 'labels'])
+
     x_val, y_val = load_pickled_data(
         DATA_DIR + 'valid.p', ['features', 'labels'])
     x_test, y_test = load_pickled_data(
         DATA_DIR + 'test.p', ['features', 'labels'])
 
     # Preprocess loaded data
-    x_train = preprocess(x_train, n_channel)
     x_val = preprocess(x_val, n_channel)
     x_test = preprocess(x_test, n_channel)
     return x_train, y_train, x_val, y_val, x_test, y_test
