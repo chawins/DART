@@ -15,9 +15,13 @@ def output_fn(correct, predicted):
 
 
 def built_mltscl():
+    """
+    Build multiscale CNN. The last layer must be logits instead of softmax. 
+    Return a compiled Keras model.
+    """
 
     # Regularization
-    l2_reg = keras.regularizers.l2(0.001)
+    l2_reg = keras.regularizers.l2(L2_LAMBDA)
 
     # Build model
     inpt = keras.layers.Input(shape=INPUT_SHAPE)
@@ -53,7 +57,7 @@ def built_mltscl():
 
     # Specify optimizer
     adam = keras.optimizers.Adam(
-        lr=0.001, beta_1=0.9, beta_2=0.999, epsilon=1e-08, decay=0.0)
+        lr=LR, beta_1=0.9, beta_2=0.999, epsilon=1e-08, decay=0.0)
     model.compile(optimizer=adam, loss=output_fn, metrics=['accuracy'])
 
     return model

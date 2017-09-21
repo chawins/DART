@@ -2,6 +2,7 @@ keras_weights/
 input_data/
 *.pyc
 .ipynb_checkpoints/
+.vscode
 
 # OS generated files #
 ######################

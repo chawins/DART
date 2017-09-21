@@ -27,10 +27,14 @@ WIDTH = 32
 N_CHANNEL = 3                               # Number of channels
 OUTPUT_DIM = 43                             # Number of output dimension
 NUM_EPOCH = 100                             # Number of epoch to train
+LR = 0.0001                                 # Learning rate
+L2_LAMBDA = 0.0001                          # Lambda for l2 regularization
 
 # Set paths
-WEIGTHS_PATH = "./keras_weights/weights_mltscl.hdf5"   # Path to saved weights
-DATA_DIR = "/D/Bink/ml_defense/input_data/GTSRB/"      # Path to directory containing dataset
+# Path to saved weights
+WEIGTHS_PATH = "./keras_weights/weights_mltscl_dataaug.hdf5"
+# Path to directory containing dataset
+DATA_DIR = "./input_data/"
 
 INPUT_SHAPE = (HEIGHT, WIDTH, N_CHANNEL)    # Input shape of model
 IMAGE_SIZE = (HEIGHT, WIDTH)                # Height and width of resized image

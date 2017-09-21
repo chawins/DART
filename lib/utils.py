@@ -178,17 +178,16 @@ def load_dataset_GTSRB(n_channel=3, train_file_name=None):
     if train_file_name is None:
         x_train, y_train = load_pickled_data(
             DATA_DIR + 'train.p', ['features', 'labels'])
-        x_train = preprocess(x_train, n_channel)
     else:
         x_train, y_train = load_pickled_data(
             DATA_DIR + train_file_name, ['features', 'labels'])
-
     x_val, y_val = load_pickled_data(
         DATA_DIR + 'valid.p', ['features', 'labels'])
     x_test, y_test = load_pickled_data(
         DATA_DIR + 'test.p', ['features', 'labels'])
 
     # Preprocess loaded data
+    x_train = preprocess(x_train, n_channel)
     x_val = preprocess(x_val, n_channel)
     x_test = preprocess(x_test, n_channel)
     return x_train, y_train, x_val, y_val, x_test, y_test
