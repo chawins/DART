@@ -3,6 +3,8 @@ input_data/
 *.pyc
 .ipynb_checkpoints/
 .vscode
+*_tmp.py
+test_*
 
 # OS generated files #
 ######################

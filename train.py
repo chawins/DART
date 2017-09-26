@@ -20,7 +20,7 @@ if LOAD_WEIGHTS:
 x_train, y_train, x_val, y_val, x_test, y_test = load_dataset_GTSRB(
     n_channel=N_CHANNEL, train_file_name=TRAIN_FILE_NAME)
 
-# Convert one-hot encoding to category
+# Convert to one-hot encoding
 y_train = keras.utils.to_categorical(y_train, NUM_LABELS)
 y_test = keras.utils.to_categorical(y_test, NUM_LABELS)
 y_val = keras.utils.to_categorical(y_val, NUM_LABELS)
