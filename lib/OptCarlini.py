@@ -1,7 +1,6 @@
-from parameters import *
 from lib.keras_utils import *
 from lib.utils import *
-
+from parameters import *
 
 EPS = 1e-10   # Epsilon
 MIN_CP = -2.  # Minimum power index of c
@@ -12,6 +11,12 @@ EARLYSTOP_STEPS = 5000  # Early stopping if no improvement for certain steps
 
 
 class OptCarlini:
+    """
+    This class implements adversarial examples generator modeled after Carlini
+    et al. (https://arxiv.org/abs/1608.04644). It also includes options to use
+    other losses, change of variable, optimizer with bounding box (L-BFGS-B,
+    etc.) and mask.
+    """
 
     def _setup_opt(self):
         """Used to setup optimization when c is updated"""
@@ -28,26 +33,69 @@ class OptCarlini:
         else:
             # Use learning rate decay
             global_step = tf.Variable(0, trainable=False)
-            # learning_rate = tf.train.exponential_decay(self.lr, global_step,
-            #                                            500, 0.95, staircase=True)
-            learning_rate = tf.train.inverse_time_decay(
+            # decay_lr = tf.train.exponential_decay(
+            #   self.lr, global_step, 500, 0.95, staircase=True)
+            decay_lr = tf.train.inverse_time_decay(
                 self.lr, global_step, 10, 0.01)
             # Use Adam optimizer
             self.optimizer = tf.train.AdamOptimizer(
-                learning_rate=learning_rate, beta1=0.9, beta2=0.999, epsilon=1e-08)
+                learning_rate=decay_lr, beta1=0.9, beta2=0.999, epsilon=1e-08)
             self.opt = self.optimizer.minimize(
                 self.f, var_list=self.var_list, global_step=global_step)
 
-    def __init__(self, model, target=True, c=10, lr=0.01, init_scl=0.2,
-                 use_bound=False, loss_op=0, k=10, var_change=True, use_mask=True):
+    def __init__(self, model, target=True, c=1, lr=0.01, init_scl=0.1,
+                 use_bound=False, loss_op=0, k=5, var_change=True,
+                 use_mask=True):
+        """
+        Initialize the optimizer. Default values of the parameters are
+        recommended and decided specifically for attacking traffic sign
+        recognizer trained on GTSRB dataset.
 
+        Parameters
+        ----------
+        model      : Keras model
+                     Target model to attack
+        target     : (optional) bool (default: True)
+                     True if performing targeted attack; False, otherwise.
+        c          : (optional) float (default: 1)
+                     Constant balancing the objective function (f) between norm
+                     of perturbation and loss (f = c * loss + norm). Larger c
+                     means stronger attack but also more "visible" (stronger
+                     perturbation).
+        lr         : (optional) float (default: 0.01)
+                     Learning rate of optimizer
+        init_scl   : (optional) float (default: 0.1)
+                     Standard deviation of Gaussian used to initialize objective
+                     variable
+        use_bound  : (optional) bool (default: False)
+                     If True, optimizer with bounding box [0, 1] will be used.
+                     Otherwise, Adam optimizer is used.
+        loss_op    : (optional) int (default: 0)
+                     Option for loss function to optimize over.
+                     loss_op = 0: Carlini's l2-attack
+                     loss_op = 1: cross-entropy loss
+        k          : (optional) float (default: 5)
+                     "Confidence threshold" used with loss_op = 0. Used to
+                     control strength of attack. The higher the k the stronger
+                     the attack.
+        var_change : (optional) bool (default: True)
+                     If True, objective variable will be changed according to
+                     Carlini  et al. (which also gets rid of the need to use
+                     any bounding) Otherwise, optimize directly on perturbation.
+        use_mask   : (optional) bool (default: True)
+                     if True, perturbation will be masked before applying to
+                     the target sign. Mask must be specified when calling
+                     optimize() and optimize_search().
+        """
+
+        self.model = model
         self.target = target
+        self.c = c
         self.lr = lr
         self.use_bound = use_bound
-        self.use_mask = use_mask
-        self.model = model
+        self.loss_op = loss_op
         self.k = k
-        self.c = c
+        self.use_mask = use_mask
 
         # Initialize variables
         init_val = np.random.normal(scale=init_scl, size=((1,) + INPUT_SHAPE))
@@ -55,6 +103,7 @@ class OptCarlini:
         self.y = K.placeholder(dtype='float32', shape=(1, OUTPUT_DIM))
         if self.use_mask:
             self.m = K.placeholder(dtype='float32', shape=((1,) + INPUT_SHAPE))
+
         # If change of variable is specified
         if var_change:
             # Optimize on w instead of d
@@ -76,6 +125,7 @@ class OptCarlini:
             self.var_list = [self.d]
 
         model_output = self.model(self.x_in)
+
         if loss_op == 0:
             # Carlini l2-attack's loss
             # Get 2 largest outputs
@@ -94,7 +144,7 @@ class OptCarlini:
         elif loss_op == 1:
             # Cross entropy loss, loss = -log(F(x_t))
             self.loss = K.categorical_crossentropy(
-                self.y, model_output, from_logits=True)
+                self.y, model_output, from_logits=True)[0]
             if not self.target:
                 # loss = log(F(x_y))
                 self.loss *= -1
@@ -103,11 +153,13 @@ class OptCarlini:
 
         # Regularization term with l2-norm
         self.norm = tf.norm(self.d, ord='euclidean')
+
+        # Call a helper function to finalize and set up optimizer
         self._setup_opt()
 
     def optimize(self, x, y, n_step=1000, prog=True, mask=None):
         """
-        Run optimization attack, produce adversarial example from a single 
+        Run optimization attack, produce adversarial example from a single
         sample, x.
 
         Parameters
@@ -115,7 +167,7 @@ class OptCarlini:
         x      : np.array
                  Original benign sample
         y      : np.array
-                 One-hot encoded target label if <target> was set to True or 
+                 One-hot encoded target label if <target> was set to True or
                  one-hot encoded true label, otherwise.
         n_step : (optional) int
                  Number of steps to run optimization
@@ -149,7 +201,7 @@ class OptCarlini:
             else:
                 feed_dict = {self.x: x_, self.y: y_, K.learning_phase(): False}
 
-            # Set up some variables for early stopping
+            # Set up some variables for early stopping for loss_op = 0
             min_norm = float("inf")
             min_d = None
             earlystop_count = 0
@@ -161,37 +213,44 @@ class OptCarlini:
                 else:
                     sess.run(self.opt, feed_dict=feed_dict)
 
-                norm = sess.run(self.norm, feed_dict=feed_dict)
-                loss = sess.run(self.loss, feed_dict=feed_dict)
-                # Save working adversarial example with smallest norm
-                if loss == -self.k:
-                    if norm < min_norm:
-                        min_norm = norm
-                        min_d = sess.run(self.d, feed_dict=feed_dict)
-                        # Reset early stopping counter
-                        earlystop_count = 0
-                    else:
-                        earlystop_count += 1
-                        # Early stopping
-                        if earlystop_count > EARLYSTOP_STEPS:
-                            print step, min_norm
-                            break
+                # Keep track of "best" solution
+                if self.loss_op == 0:
+                    norm = sess.run(self.norm, feed_dict=feed_dict)
+                    loss = sess.run(self.loss, feed_dict=feed_dict)
+                    # Save working adversarial example with smallest norm
+                    if loss == -self.k:
+                        if norm < min_norm:
+                            min_norm = norm
+                            min_d = sess.run(self.d, feed_dict=feed_dict)
+                            # Reset early stopping counter
+                            earlystop_count = 0
+                        else:
+                            earlystop_count += 1
+                            # Early stop if no improvement
+                            if earlystop_count > EARLYSTOP_STEPS:
+                                print step, min_norm
+                                break
 
                 # Print progress
                 if (step % PROG_PRINT_STEPS == 0) and prog:
                     f = sess.run(self.f, feed_dict=feed_dict)
+                    norm = sess.run(self.norm, feed_dict=feed_dict)
+                    loss = sess.run(self.loss, feed_dict=feed_dict)
                     print "Step: {}, norm={:.3f}, loss={:.3f}, obj={:.3f}".format(step, norm, loss, f)
 
             if min_d is not None:
                 x_adv = (x_ + min_d).reshape(INPUT_SHAPE)
                 return x_adv, min_norm
             else:
-                return x, None
+                d = sess.run(self.d, feed_dict=feed_dict)
+                norm = sess.run(self.norm, feed_dict=feed_dict)
+                x_adv = (x_ + d).reshape(INPUT_SHAPE)
+                return x_adv, norm
 
     def optimize_search(self, x, y, n_step=1000, search_step=10, prog=True,
                         mask=None):
         """
-        Run optimization attack, produce adversarial example from a single 
+        Run optimization attack, produce adversarial example from a single
         sample, x. Does binary search on log_10(c) to find optimal value of c.
 
         Parameters
@@ -199,7 +258,7 @@ class OptCarlini:
         x      : np.array
                  Original benign sample
         y      : np.array, shape=(OUTPUT_DIM,)
-                 One-hot encoded target label if <target> was set to True or 
+                 One-hot encoded target label if <target> was set to True or
                  one-hot encoded true label, otherwise.
         n_step : (optional) int
                  Number of steps to run optimization

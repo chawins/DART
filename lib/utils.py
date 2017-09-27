@@ -1,8 +1,8 @@
 from scipy import ndimage as ndi
 from skimage.feature import canny
 
-from parameters import *
 from lib.keras_utils import *
+from parameters import *
 
 # Threshold for checking mask area
 MASK_THRES_MIN = 0.1

@@ -1,10 +1,9 @@
-from parameters import *
-from lib.utils import *
 from lib.keras_utils import *
-from lib.RandomTransform import *
 from lib.OptCarlini import *
 from lib.OptTransform import *
-
+from lib.RandomTransform import *
+from lib.utils import *
+from parameters import *
 
 # Set training metadata
 LOAD_WEIGHTS = True
