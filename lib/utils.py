@@ -130,6 +130,11 @@ def to_class(y):
     return np.argmax(y, axis=1)
 
 
+def predict(model, x):
+    """Use model to predict class of x"""
+    return to_class(model.predict(x.reshape((-1,) + INPUT_SHAPE)))
+
+
 def load_dataset_GTSRB(n_channel=3, train_file_name=None):
     """
     Load GTSRB data as a (datasize) x (channels) x (height) x (width) numpy

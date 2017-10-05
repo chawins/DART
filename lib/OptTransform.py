@@ -14,8 +14,8 @@ EARLYSTOP_STEPS = 5000  # Early stopping if no improvement for certain steps
 class OptTransform:
     """
     This class implements a generator for adversarial examples that are robust
-    to certain transformations or variations. It is a modification from 
-    Carlini et al. (https://arxiv.org/abs/1608.04644) and Athalye et al. 
+    to certain transformations or variations. It is a modification from
+    Carlini et al. (https://arxiv.org/abs/1608.04644) and Athalye et al.
     (https://arxiv.org/abs/1707.07397)
     """
 
@@ -170,6 +170,29 @@ class OptTransform:
         self.rnd_transform = RandomTransform(seed=seed, p=1.0, intensity=0.3)
 
     def optimize(self, x, y, n_step=1000, prog=True, mask=None):
+        """
+        Run optimization attack, produce adversarial example from a batch of
+        images transformed from a single sample, x.
+
+        Parameters
+        ----------
+        x      : np.array
+                 Original benign sample
+        y      : np.array
+                 One-hot encoded target label if <target> was set to True or
+                 one-hot encoded true label, otherwise.
+        n_step : (optional) int
+                 Number of steps to run optimization
+        prog   : (optional) bool
+                 True if progress should be printed
+        mask   : (optional) np.array of 0 or 1, shape=(n_sample, height, width)
+                 Mask to restrict gradient update on valid pixels
+
+        Returns
+        -------
+        x_adv : np.array, shape=INPUT_SHAPE
+                Output adversarial example created from x
+        """
 
         with tf.Session() as sess:
 
@@ -242,3 +265,80 @@ class OptTransform:
                 norm = sess.run(self.norm, feed_dict=feed_dict)
                 x_adv = (x_orig_ + d).reshape(INPUT_SHAPE)
                 return x_adv, norm
+
+    def optimize_search(self, x, y, n_step=1000, search_step=10, prog=True,
+                        mask=None):
+        """
+        Run optimization attack, produce adversarial example from a batch of
+        images transformed from a single sample, x. Does binary search on
+        log_10(c) to find optimal value of c.
+
+        Parameters
+        ----------
+        x      : np.array
+                 Original benign sample
+        y      : np.array, shape=(OUTPUT_DIM,)
+                 One-hot encoded target label if <target> was set to True or
+                 one-hot encoded true label, otherwise.
+        n_step : (optional) int
+                 Number of steps to run optimization
+        search_step : (optional) int
+                      Number of steps to search on c
+        prog   : (optional) bool
+                 True if progress should be printed
+        mask   : (optional) np.array of 0 or 1, shape=(n_sample, height, width)
+                 Mask to restrict gradient update on valid pixels
+
+        Returns
+        -------
+        x_adv_suc : np.array, shape=INPUT_SHAPE
+                    Successful adversarial example created from x. None if fail.
+        norm_suc  : float
+                    Perturbation magnitude of x_adv_suc. None if fail.
+        """
+
+        # Declare min-max of search line [1e-2, 1e2] for c = 1e(cp)
+        cp_lo = MIN_CP
+        cp_hi = MAX_CP
+
+        x_adv_suc = None
+        norm_suc = None
+        start_time = time.time()
+
+        # Binary search on cp
+        for c_step in range(search_step):
+
+            # Update c
+            cp = (cp_lo + cp_hi) / 2
+            self.c = 10 ** cp
+            self._setup_opt()
+
+            # Run optimization with new c
+            x_adv, norm = self.optimize(
+                x, y, n_step=n_step, prog=False, mask=mask)
+
+            # Evaluate result
+            y_pred = self.model.predict(x_adv.reshape((1,) + INPUT_SHAPE))[0]
+            score = softmax(y_pred)[np.argmax(y)]
+            if self.target:
+                if score > SCORE_THRES:
+                    # Attack succeeded, decrease cp to lower norm
+                    cp_hi = cp
+                    x_adv_suc = np.copy(x_adv)
+                    norm_suc = norm
+                else:
+                    # Attack failed, increase cp for stronger attack
+                    cp_lo = cp
+            else:
+                if score > 1 - SCORE_THRES:
+                    # Attack failed
+                    cp_lo = cp
+                else:
+                    # Attack succeeded
+                    cp_hi = cp
+                    x_adv_suc = np.copy(x_adv)
+                    norm_suc = norm
+            if prog:
+                print "c_Step: {}, c={:.4f}, score={:.3f}".format(c_step, self.c, score)
+        print "Finished in {:.2f}s".format(time.time() - start_time)
+        return x_adv_suc, norm_suc

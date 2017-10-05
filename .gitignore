@@ -5,6 +5,8 @@ input_data/
 .vscode
 *_tmp.py
 test_*
+*.png
+Stop_Sign_Dataset/
 
 # OS generated files #
 ######################
