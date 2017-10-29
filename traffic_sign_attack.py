@@ -35,4 +35,4 @@ signnames = read_csv("./signnames.csv").values[:, 1]
 mag_list = np.linspace(0.2, 2, 10)
 x_adv = fg(model, x_test, y_test, mag_list)
 
-print eval_adv(model, x_adv, y_test)
+print(eval_adv(model, x_adv, y_test))

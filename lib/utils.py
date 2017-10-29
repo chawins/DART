@@ -1,8 +1,10 @@
+from lib.keras_utils import *
+from parameters import *
 from scipy import ndimage as ndi
 from skimage.feature import canny
 
-from lib.keras_utils import *
-from parameters import *
+from lib.RandomEnhance import *
+from lib.RandomTransform import *
 
 # Threshold for checking mask area
 MASK_THRES_MIN = 0.1
@@ -276,7 +278,7 @@ def eval_adv(model, x_adv, y, target=True):
                 suc_rate.append(np.sum(y_t != y_) / float(n_sample))
         return suc_rate
     else:
-        print "Incorrect format for x_adv."
+        print("Incorrect format for x_adv.")
         return
 
 
@@ -328,7 +330,7 @@ def fg(model, x, y, mag_list, target=True, mask=None):
                Adversarial examples
     """
 
-    x_adv = np.zeros((len(mag_list),) + x.shape, dtype=np.float32)
+    x_adv = np.zeros((len(mag_list), ) + x.shape, dtype=np.float32)
     grad_fn = gradient_fn(model)
     start_time = time.time()
 
@@ -339,6 +341,7 @@ def fg(model, x, y, mag_list, target=True, mask=None):
             grad = -1 * gradient_input(grad_fn, x_in, y[i])
         else:
             grad = gradient_input(grad_fn, x_in, y[i])
+        print(np.linalg.norm(grad))
 
         # Apply mask
         if mask is not None:
@@ -357,7 +360,7 @@ def fg(model, x, y, mag_list, target=True, mask=None):
         # Progress printing
         if (i % 1000 == 0) and (i > 0):
             elasped_time = time.time() - start_time
-            print "Finished {} samples in {:.2f}s.".format(i, elasped_time)
+            print("Finished {} samples in {:.2f}s.".format(i, elasped_time))
             start_time = time.time()
 
     # Clip adversarial examples to stay in range [0, 1]
@@ -431,7 +434,93 @@ def iterative(model, x, y, n_step=20, step_size=0.05, target=True, mask=None):
         # Progress printing
         if (i % 200 == 0) and (i > 0):
             elasped_time = time.time() - start_time
-            print "Finished {} samples in {:.2f}s.".format(i, elasped_time)
+            print("Finished {} samples in {:.2f}s.".format(i, elasped_time))
             start_time = time.time()
+
+    return x_adv
+
+
+def fg_transform(model, x, y, mag_list, target=True, mask=None,
+                 batch_size=BATCH_SIZE):
+    """
+    Fast Gradient attack. Similar to iterative attack but only takes one step
+    and then clip result afterward.
+
+    Parameters
+    ----------
+    model    : Keras Model
+               Model to attack
+    x        : np.array, shape=(n_sample, height, width, n_channel)
+               Benign samples to attack
+    y        : np.array, shape=(n_sample, NUM_LABELS)
+               Target label for each of the sample in x if target is True.
+               Otherwise, corresponding labels of x. Must be one-hot encoded.
+    mag_list : list of float
+               List of perturbation magnitude to use in the attack
+    target   : (optional) bool
+               True, if targeted attack. False, otherwise.
+    mask     : (optional) np.array of 0 or 1, shape=(n_sample, height, width)
+               Mask to restrict gradient update on valid pixels
+
+    Return
+    ------
+    x_adv    : np.array, shape=(n_mag, n_sample, height, width, n_channel)
+               Adversarial examples
+    """
+
+    P_TRN = 1.0  # Probability of applying transformation
+    P_ENH = 1.0  # Probability of applying enhancement
+    INT_TRN = 0.3  # Intensity of randomness (for transform)
+    INT_ENH = 0.4  # Intensity of randomness (for enhance)
+
+    # Initialize random transformer
+    seed = np.random.randint(1234)
+    rnd_transform = RandomTransform(seed=seed, p=P_TRN, intensity=INT_TRN)
+    rnd_enhance = RandomEnhance(seed=seed, p=P_ENH, intensity=INT_ENH)
+
+    x_adv = np.zeros((len(mag_list),) + x.shape, dtype=np.float32)
+    grad_fn = gradient_fn(model)
+    start_time = time.time()
+
+    for i, x_in in enumerate(x):
+
+        # Retrieve gradient
+        if target:
+            grad = -1 * gradient_input(grad_fn, x_in, y[i])
+            for j in range(batch_size - 1):
+                x_trn = rnd_transform.transform(x_in)
+                x_trn = rnd_enhance.enhance(x_trn)
+                grad += -1 * gradient_input(grad_fn, x_trn, y[i])
+            grad /= batch_size
+        else:
+            grad = gradient_input(grad_fn, x_in, y[i])
+            for j in range(batch_size - 1):
+                x_trn = rnd_transform.transform(x_in)
+                x_trn = rnd_enhance.enhance(x_trn)
+                grad += gradient_input(grad_fn, x_trn, y[i])
+            grad /= batch_size
+
+        # Apply mask
+        if mask is not None:
+            mask_rep = np.repeat(mask[i, :, :, np.newaxis], N_CHANNEL, axis=2)
+            grad *= mask_rep
+
+        # Normalize gradient
+        try:
+            grad /= np.linalg.norm(grad)
+        except ZeroDivisionError:
+            raise
+
+        for j, mag in enumerate(mag_list):
+            x_adv[j, i] = x_in + grad * mag
+
+        # Progress printing
+        if (i % 1000 == 0) and (i > 0):
+            elasped_time = time.time() - start_time
+            print("Finished {} samples in {:.2f}s.".format(i, elasped_time))
+            start_time = time.time()
+
+    # Clip adversarial examples to stay in range [0, 1]
+    x_adv = np.clip(x_adv, 0, 1)
 
     return x_adv

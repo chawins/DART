@@ -1,16 +1,17 @@
 from lib.keras_utils import *
 from lib.utils import *
-from parameters import *
+from parameters_yolo import *
+from test_detector.yad2k.yad2k.models.keras_yolo import yolo_head
 
 EPS = 1e-10   # Epsilon
 MIN_CP = -2.  # Minimum power index of c
 MAX_CP = 2.   # Maximum power index of c
-SCORE_THRES = 0.9  # Softmax score threshold to consider success of attacks
+SCORE_THRES = 0.5  # Softmax score threshold to consider success of attacks
 PROG_PRINT_STEPS = 50  # Print progress every certain steps
 EARLYSTOP_STEPS = 5000  # Early stopping if no improvement for certain steps
 
 
-class OptCarlini:
+class OptYolo:
     """
     This class implements adversarial examples generator modeled after Carlini
     et al. (https://arxiv.org/abs/1608.04644). It also includes options to use
@@ -43,7 +44,7 @@ class OptCarlini:
             self.opt = self.optimizer.minimize(
                 self.f, var_list=self.var_list, global_step=global_step)
 
-    def __init__(self, model, target=True, c=1, lr=0.01, init_scl=0.1,
+    def __init__(self, model, anchors, target=True, c=1, lr=0.01, init_scl=0.1,
                  use_bound=False, loss_op=0, k=5, var_change=True,
                  use_mask=True):
         """
@@ -100,7 +101,7 @@ class OptCarlini:
         # Initialize variables
         init_val = np.random.normal(scale=init_scl, size=((1,) + INPUT_SHAPE))
         self.x = K.placeholder(dtype='float32', shape=((1,) + INPUT_SHAPE))
-        self.y = K.placeholder(dtype='float32', shape=(1, OUTPUT_DIM))
+        self.y = K.placeholder(dtype='float32', shape=(1, 19, 19, 5, 80))
         if self.use_mask:
             self.m = K.placeholder(dtype='float32', shape=((1,) + INPUT_SHAPE))
 
@@ -124,7 +125,8 @@ class OptCarlini:
             self.x_in = self.x + self.d
             self.var_list = [self.d]
 
-        model_output = self.model(self.x_in)
+        # model_output here is box_class_pred
+        _, _, _, model_output = yolo_head(self.model.output, anchors, 80)
 
         if loss_op == 0:
             # Carlini l2-attack's loss
@@ -144,7 +146,7 @@ class OptCarlini:
         elif loss_op == 1:
             # Cross entropy loss, loss = -log(F(x_t))
             self.loss = K.categorical_crossentropy(
-                self.y, model_output, from_logits=True)[0]
+                self.y, model_output, from_logits=False)[0]
             if not self.target:
                 # loss = log(F(x_y))
                 self.loss *= -1
@@ -190,7 +192,7 @@ class OptCarlini:
 
             # Ensure that shape is correct
             x_ = np.copy(x).reshape((1,) + INPUT_SHAPE)
-            y_ = np.copy(y).reshape((1, OUTPUT_DIM))
+            y_ = np.copy(y).reshape((1, 19, 19, 5, 80))
 
             # Include mask in feed_dict if mask is used
             if self.use_mask:

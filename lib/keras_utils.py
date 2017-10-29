@@ -1,9 +1,8 @@
 import keras
-from keras.models import Sequential
-from keras.layers.core import Dense, Dropout, Activation, Flatten
 from keras.layers.convolutional import Convolution2D, MaxPooling2D
+from keras.layers.core import Activation, Dense, Dropout, Flatten
 from keras.layers.normalization import BatchNormalization
-
+from keras.models import Sequential
 from parameters import *
 
 #----------------------------------- Model ------------------------------------#

@@ -1,4 +1,5 @@
 from lib.keras_utils import *
+from lib.RandomEnhance import *
 from lib.RandomTransform import *
 from lib.utils import *
 from parameters import *
@@ -6,9 +7,13 @@ from parameters import *
 EPS = 1e-10   # Epsilon
 MIN_CP = -2.  # Minimum power index of c
 MAX_CP = 2.   # Maximum power index of c
-SCORE_THRES = 0.5  # Softmax score threshold to consider success of attacks
-PROG_PRINT_STEPS = 50  # Print progress every certain steps
+SCORE_THRES = 0.99  # Softmax score threshold to consider success of attacks
+PROG_PRINT_STEPS = 200  # Print progress every certain steps
 EARLYSTOP_STEPS = 5000  # Early stopping if no improvement for certain steps
+P_TRN = 1.0  # Probability of applying transformation
+P_ENH = 1.0  # Probability of applying enhancement
+INT_TRN = 0.3  # Intensity of randomness (for transform)
+INT_ENH = 0.4  # Intensity of randomness (for enhance)
 
 
 class OptTransform:
@@ -34,19 +39,25 @@ class OptTransform:
         else:
             # Use learning rate decay
             global_step = tf.Variable(0, trainable=False)
-            # decay_lr = tf.train.exponential_decay(
-            #   self.lr, global_step, 500, 0.95, staircase=True)
-            decay_lr = tf.train.inverse_time_decay(
-                self.lr, global_step, 10, 0.01)
+
+            if self.decay:
+                # lr = tf.train.exponential_decay(
+                #     self.lr, global_step, 100, 0.95, staircase=False)
+                lr = tf.train.inverse_time_decay(
+                    self.lr, global_step, 50, 0.01, staircase=True)
+            else:
+                lr = self.lr
             # Use Adam optimizer
             self.optimizer = tf.train.AdamOptimizer(
-                learning_rate=decay_lr, beta1=0.9, beta2=0.999, epsilon=1e-08)
+                learning_rate=lr, beta1=0.9, beta2=0.999, epsilon=1e-08)
+            # self.optimizer = tf.train.GradientDescentOptimizer(
+            #     learning_rate=lr)
             self.opt = self.optimizer.minimize(
                 self.f, var_list=self.var_list, global_step=global_step)
 
     def __init__(self, model, target=True, c=1, lr=0.01, init_scl=0.1,
                  use_bound=False, loss_op=0, k=5, var_change=True,
-                 use_mask=True, batch_size=BATCH_SIZE):
+                 use_mask=True, decay=True, batch_size=BATCH_SIZE):
         """
         Initialize the optimizer. Default values of the parameters are
         recommended and decided specifically for attacking traffic sign
@@ -99,10 +110,13 @@ class OptTransform:
         self.loss_op = loss_op
         self.k = k
         self.use_mask = use_mask
+        self.decay = decay
         self.batch_size = batch_size
 
         # Initialize variables
-        init_val = np.random.normal(scale=init_scl, size=((1,) + INPUT_SHAPE))
+        #init_val = np.random.normal(scale=init_scl, size=())
+        init_val = tf.random_normal(
+            ((1,) + INPUT_SHAPE), stddev=init_scl, dtype=tf.float32)
         self.x_orig = K.placeholder(
             dtype='float32', shape=((1,) + INPUT_SHAPE))
         self.x = K.placeholder(
@@ -128,11 +142,14 @@ class OptTransform:
             self.d = tf.Variable(initial_value=init_val, trainable=True,
                                  dtype=tf.float32)
             if self.use_mask:
-                self.d = tf.multiply(self.d, self.m)
-            self.x_in = self.x + self.d
+                self.dm = tf.multiply(self.d, self.m)
+                self.x_in = self.x + self.dm
+            else:
+                self.x_in = self.x + self.d
             self.var_list = [self.d]
 
         model_output = self.model(self.x_in)
+        self.model_output = model_output
 
         if loss_op == 0:
             # Carlini l2-attack's loss
@@ -162,12 +179,17 @@ class OptTransform:
             raise ValueError("Invalid loss_op")
 
         # Regularization term with l2-norm
-        self.norm = tf.norm(self.d, ord='euclidean')
+        # self.norm = tf.norm(self.d, ord='euclidean')
+        # TODO
+        norm = tf.norm(self.d, ord='euclidean')
+        self.norm = tf.maximum(norm, 3)
         self._setup_opt()
 
-        # Initialize transformer
+        # Initialize random transformer
         seed = np.random.randint(1234)
-        self.rnd_transform = RandomTransform(seed=seed, p=1.0, intensity=0.3)
+        self.rnd_transform = RandomTransform(
+            seed=seed, p=P_TRN, intensity=INT_TRN)
+        self.rnd_enhance = RandomEnhance(seed=seed, p=P_ENH, intensity=INT_ENH)
 
     def optimize(self, x, y, n_step=1000, prog=True, mask=None):
         """
@@ -208,7 +230,8 @@ class OptTransform:
             # Generate a batch of transformed images
             x_[0] = np.copy(x)
             for i in range(1, self.batch_size):
-                x_[i] = self.rnd_transform.transform(x)
+                tmp = self.rnd_transform.transform(x)
+                x_[i] = self.rnd_enhance.enhance(tmp)
 
             # Include mask in feed_dict if mask is used
             if self.use_mask:
@@ -247,7 +270,7 @@ class OptTransform:
                             earlystop_count += 1
                             # Early stop if no improvement
                             if earlystop_count > EARLYSTOP_STEPS:
-                                print step, min_norm
+                                print(step, min_norm)
                                 break
 
                 # Print progress
@@ -255,7 +278,9 @@ class OptTransform:
                     f = sess.run(self.f, feed_dict=feed_dict)
                     norm = sess.run(self.norm, feed_dict=feed_dict)
                     loss = sess.run(self.loss, feed_dict=feed_dict)
-                    print "Step: {}, norm={:.3f}, loss={:.3f}, obj={:.3f}".format(step, norm, loss, f)
+                    print("Step: {}, norm={:.3f}, loss={:.3f}, obj={:.3f}".format(
+                        step, norm, loss, f))
+                    #print(sess.run(self.model_output, feed_dict=feed_dict)[0])
 
             if min_d is not None:
                 x_adv = (x_orig_ + min_d).reshape(INPUT_SHAPE)
@@ -302,7 +327,7 @@ class OptTransform:
         cp_hi = MAX_CP
 
         x_adv_suc = None
-        norm_suc = None
+        norm_suc = float("inf")
         start_time = time.time()
 
         # Binary search on cp
@@ -324,21 +349,26 @@ class OptTransform:
                 if score > SCORE_THRES:
                     # Attack succeeded, decrease cp to lower norm
                     cp_hi = cp
-                    x_adv_suc = np.copy(x_adv)
-                    norm_suc = norm
+                    # Only save adv example if norm becomes smaller
+                    if norm < norm_suc:
+                        x_adv_suc = np.copy(x_adv)
+                        norm_suc = norm
                 else:
                     # Attack failed, increase cp for stronger attack
                     cp_lo = cp
             else:
                 if score > 1 - SCORE_THRES:
-                    # Attack failed
+                    # Attack failed, increase cp for stronger attack
                     cp_lo = cp
                 else:
-                    # Attack succeeded
+                    # Attack succeeded, decrease cp to lower norm
                     cp_hi = cp
-                    x_adv_suc = np.copy(x_adv)
-                    norm_suc = norm
+                    # Only save adv example if norm becomes smaller
+                    if norm < norm_suc:
+                        x_adv_suc = np.copy(x_adv)
+                        norm_suc = norm
             if prog:
-                print "c_Step: {}, c={:.4f}, score={:.3f}".format(c_step, self.c, score)
-        print "Finished in {:.2f}s".format(time.time() - start_time)
+                print("c_Step: {}, c={:.4f}, score={:.3f}, norm={:.3f}".format(
+                    c_step, self.c, score, norm))
+        print("Finished in {:.2f}s".format(time.time() - start_time))
         return x_adv_suc, norm_suc
