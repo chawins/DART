@@ -369,7 +369,8 @@ def fg(model, x, y, mag_list, target=True, mask=None):
     return x_adv
 
 
-def iterative(model, x, y, n_step=20, step_size=0.05, target=True, mask=None):
+def iterative(model, x, y, norm="2", n_step=20, step_size=0.05, target=True,
+              mask=None):
     """
     Iterative attack. Move a benign sample in the gradient direction one small
     step at a time for <n_step> times. Clip values after each step.
@@ -383,6 +384,9 @@ def iterative(model, x, y, n_step=20, step_size=0.05, target=True, mask=None):
     y         : np.array, shape=(n_sample, NUM_LABELS)
                 Target label for each of the sample in x if target is True.
                 Otherwise, corresponding labels of x. Must be one-hot encoded.
+    norm      : (optional) string
+                "2" = L-2 norm (default)
+                "inf" = L-infinity norm
     n_step    : (optional) int
                 Number of iteration to take
     step_size : (optional) float
@@ -402,9 +406,8 @@ def iterative(model, x, y, n_step=20, step_size=0.05, target=True, mask=None):
     grad_fn = gradient_fn(model)
     start_time = time.time()
 
-    for i, x_in in enumerate(x):
+    for i, x_cur in enumerate(x):
 
-        x_cur = np.copy(x_in)
         # Get mask with the same shape as gradient
         if mask is not None:
             mask_rep = np.repeat(mask[i, :, :, np.newaxis], N_CHANNEL, axis=2)
@@ -415,15 +418,19 @@ def iterative(model, x, y, n_step=20, step_size=0.05, target=True, mask=None):
             else:
                 grad = gradient_input(grad_fn, x_cur, y[i])
 
+            if norm == "2":
+                try:
+                    grad /= np.linalg.norm(grad)
+                except ZeroDivisionError:
+                    raise
+            elif norm == "inf":
+                grad = np.sign(grad)
+            else:
+                raise ValueError("Invalid norm!")
+
             # Apply mask
             if mask is not None:
                 grad *= mask_rep
-
-            # Normalize gradient
-            try:
-                grad /= np.linalg.norm(grad)
-            except ZeroDivisionError:
-                raise
 
             x_cur += grad * step_size
             # Clip to stay in range [0, 1]
@@ -522,5 +529,93 @@ def fg_transform(model, x, y, mag_list, target=True, mask=None,
 
     # Clip adversarial examples to stay in range [0, 1]
     x_adv = np.clip(x_adv, 0, 1)
+
+    return x_adv
+
+
+def rnd_pgd(model, x, y, norm="2", n_step=40, step_size=0.01, target=True,
+            mask=None, init_rnd=0.1):
+    """
+    Projected gradient descent started with a random point in a ball centered
+    around real data point.
+    """
+
+    x_rnd = np.zeros_like(x)
+
+    for i, x_cur in enumerate(x):
+
+        # Find a random point in a ball centered at given data point
+        epsilon = np.random.rand(x_cur.shape) - 0.5
+        if norm == "2":
+            try:
+                epsilon /= np.linalg.norm(epsilon)
+            except ZeroDivisionError:
+                raise
+        elif norm == "inf":
+            epsilon = np.sign(epsilon)
+        else:
+            raise ValueError("Invalid norm!")
+
+        x_cur += init_rnd * epsilon
+        x_rnd[i] = np.clip(x_cur, 0, 1)
+
+    return iterative(model, x_rnd, y, norm, n_step, step_size, target, mask)
+
+
+def s_pgd(model, x, y, norm="2", n_step=40, step_size=0.01, target=True,
+          mask=None, beta=0.1):
+    """
+    Projected gradient descent with added randomness during each step
+    """
+
+    x_adv = np.zeros_like(x)
+    grad_fn = gradient_fn(model)
+    start_time = time.time()
+
+    for i, x_cur in enumerate(x):
+
+        # Get mask with the same shape as gradient
+        if mask is not None:
+            mask_rep = np.repeat(mask[i, :, :, np.newaxis], N_CHANNEL, axis=2)
+        # Start update in steps
+        for _ in range(n_step):
+
+            # Get gradient
+            if target is not None:
+                grad = -1 * gradient_input(grad_fn, x_cur, y[i])
+            else:
+                grad = gradient_input(grad_fn, x_cur, y[i])
+
+            # Get random direction
+            epsilon = np.random.rand(x_cur.shape) - 0.5
+
+            if norm == "2":
+                try:
+                    grad /= np.linalg.norm(grad)
+                    epsilon /= np.linalg.norm(epsilon)
+                except ZeroDivisionError:
+                    raise
+            elif norm == "inf":
+                grad = np.sign(grad)
+                epsilon = np.sign(epsilon)
+            else:
+                raise ValueError("Invalid norm!")
+
+            # Apply mask
+            if mask is not None:
+                grad *= mask_rep
+                epsilon += mask_rep
+
+            x_cur += (grad * step_size + beta * epsilon * step_size)
+            # Clip to stay in range [0, 1]
+            x_cur = np.clip(x_cur, 0, 1)
+
+        x_adv[i] = x_cur
+
+        # Progress printing
+        if (i % 200 == 0) and (i > 0):
+            elasped_time = time.time() - start_time
+            print("Finished {} samples in {:.2f}s.".format(i, elasped_time))
+            start_time = time.time()
 
     return x_adv
