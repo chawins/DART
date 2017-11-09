@@ -134,7 +134,12 @@ def to_class(y):
 
 def predict(model, x):
     """Use model to predict class of x"""
-    return to_class(model.predict(x.reshape((-1,) + INPUT_SHAPE)))
+
+    y = to_class(model.predict(x.reshape((-1,) + INPUT_SHAPE)))
+    if x.ndim == 3:
+        return y[0]
+    else:
+        return y
 
 
 def load_dataset_GTSRB(n_channel=3, train_file_name=None):
@@ -545,7 +550,8 @@ def rnd_pgd(model, x, y, norm="2", n_step=40, step_size=0.01, target=True,
     for i, x_cur in enumerate(x):
 
         # Find a random point in a ball centered at given data point
-        epsilon = np.random.rand(x_cur.shape) - 0.5
+        h, w, c = x_cur.shape
+        epsilon = np.random.rand(h, w, c) - 0.5
         if norm == "2":
             try:
                 epsilon /= np.linalg.norm(epsilon)
@@ -556,14 +562,13 @@ def rnd_pgd(model, x, y, norm="2", n_step=40, step_size=0.01, target=True,
         else:
             raise ValueError("Invalid norm!")
 
-        x_cur += init_rnd * epsilon
-        x_rnd[i] = np.clip(x_cur, 0, 1)
+        x_rnd[i] = np.clip(x_cur + init_rnd * epsilon, 0, 1)
 
     return iterative(model, x_rnd, y, norm, n_step, step_size, target, mask)
 
 
 def s_pgd(model, x, y, norm="2", n_step=40, step_size=0.01, target=True,
-          mask=None, beta=0.1):
+          mask=None, beta=0.1, early_stop=True):
     """
     Projected gradient descent with added randomness during each step
     """
@@ -577,6 +582,8 @@ def s_pgd(model, x, y, norm="2", n_step=40, step_size=0.01, target=True,
         # Get mask with the same shape as gradient
         if mask is not None:
             mask_rep = np.repeat(mask[i, :, :, np.newaxis], N_CHANNEL, axis=2)
+
+        y_cls = np.argmax(y[i])
         # Start update in steps
         for _ in range(n_step):
 
@@ -586,8 +593,9 @@ def s_pgd(model, x, y, norm="2", n_step=40, step_size=0.01, target=True,
             else:
                 grad = gradient_input(grad_fn, x_cur, y[i])
 
-            # Get random direction
-            epsilon = np.random.rand(x_cur.shape) - 0.5
+            # Get uniformly random direction
+            h, w, c = x_cur.shape
+            epsilon = np.random.rand(h, w, c) - 0.5
 
             if norm == "2":
                 try:
@@ -609,6 +617,15 @@ def s_pgd(model, x, y, norm="2", n_step=40, step_size=0.01, target=True,
             x_cur += (grad * step_size + beta * epsilon * step_size)
             # Clip to stay in range [0, 1]
             x_cur = np.clip(x_cur, 0, 1)
+
+            if early_stop:
+                # Stop when sample becomes adversarial
+                if target is not None:
+                    if predict(model, x_cur) == y_cls:
+                        break
+                else:
+                    if predict(model, x_cur) != y_cls:
+                        break
 
         x_adv[i] = x_cur
 
