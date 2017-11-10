@@ -411,8 +411,9 @@ def iterative(model, x, y, norm="2", n_step=20, step_size=0.05, target=True,
     grad_fn = gradient_fn(model)
     start_time = time.time()
 
-    for i, x_cur in enumerate(x):
+    for i, x_in in enumerate(x):
 
+        x_cur = np.copy(x_in)
         # Get mask with the same shape as gradient
         if mask is not None:
             mask_rep = np.repeat(mask[i, :, :, np.newaxis], N_CHANNEL, axis=2)
@@ -577,8 +578,9 @@ def s_pgd(model, x, y, norm="2", n_step=40, step_size=0.01, target=True,
     grad_fn = gradient_fn(model)
     start_time = time.time()
 
-    for i, x_cur in enumerate(x):
+    for i, x_in in enumerate(x):
 
+        x_cur = np.copy(x_in)
         # Get mask with the same shape as gradient
         if mask is not None:
             mask_rep = np.repeat(mask[i, :, :, np.newaxis], N_CHANNEL, axis=2)
