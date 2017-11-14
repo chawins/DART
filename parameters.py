@@ -19,12 +19,12 @@ from scipy import misc
 from tensorflow.contrib.opt import ScipyOptimizerInterface
 
 # Set constants
-NUM_LABELS = 10                             # Number of labels
+NUM_LABELS = 43                             # Number of labels
 BATCH_SIZE = 32                             # Size of batch
-HEIGHT = 28
-WIDTH = 28
-N_CHANNEL = 1                               # Number of channels
-OUTPUT_DIM = 10                             # Number of output dimension
+HEIGHT = 32
+WIDTH = 32
+N_CHANNEL = 3                               # Number of channels
+OUTPUT_DIM = 43                             # Number of output dimension
 NUM_EPOCH = 100                             # Number of epoch to train
 LR = 0.0001                                 # Learning rate
 L2_LAMBDA = 0.0001                          # Lambda for l2 regularization

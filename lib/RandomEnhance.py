@@ -31,6 +31,10 @@ class RandomEnhance():
         if seed is not None:
             self.seed = seed
             self.random.seed(seed)
+        self.last_factors = None
+
+    def get_last_factors(self):
+        return self.last_factors
 
     def enhance(self, image):
         """
@@ -44,7 +48,7 @@ class RandomEnhance():
 
     def intensity_enhance(self, im):
         """
-        Perform random enhancement with specified intensity [0,1]. The range of 
+        Perform random enhancement with specified intensity [0,1]. The range of
         random factors are chosen to be in an appropriate range.
         """
 
@@ -52,6 +56,7 @@ class RandomEnhance():
         contrast_factor = self.intensity * self.random.uniform(-0.5, 0.5) + 1
         sharpess_factor = self.intensity * self.random.uniform(-0.8, 0.8) + 1
         bright_factor = self.intensity * self.random.uniform(-0.5, 0.5) + 1
+        self.last_factors = [color_factor, contrast_factor, sharpess_factor, bright_factor]
 
         image = Image.fromarray(np.uint8(im * 255))
         enhancer = ImageEnhance.Color(image)
@@ -62,5 +67,19 @@ class RandomEnhance():
         image = enhancer.enhance(sharpess_factor)
         enhancer = ImageEnhance.Brightness(image)
         image = enhancer.enhance(bright_factor)
+
+        return np.asarray(image) / 255.
+
+    def enhance_factors(self, im, factors):
+
+        image = Image.fromarray(np.uint8(im * 255))
+        enhancer = ImageEnhance.Color(image)
+        image = enhancer.enhance(factors[0])
+        enhancer = ImageEnhance.Contrast(image)
+        image = enhancer.enhance(factors[1])
+        enhancer = ImageEnhance.Sharpness(image)
+        image = enhancer.enhance(factors[2])
+        enhancer = ImageEnhance.Brightness(image)
+        image = enhancer.enhance(factors[3])
 
         return np.asarray(image) / 255.

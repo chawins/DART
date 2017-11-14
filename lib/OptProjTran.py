@@ -1,8 +1,9 @@
+import random
+
 from lib.keras_utils import *
-from lib.RandomEnhance import *
-from lib.RandomTransform import *
 from lib.utils import *
 from parameters import *
+from skimage.transform import ProjectiveTransform
 
 EPS = 1e-10   # Epsilon
 MIN_CP = -2.  # Minimum power index of c
@@ -10,13 +11,10 @@ MAX_CP = 2.   # Maximum power index of c
 SCORE_THRES = 0.99  # Softmax score threshold to consider success of attacks
 PROG_PRINT_STEPS = 200  # Print progress every certain steps
 EARLYSTOP_STEPS = 5000  # Early stopping if no improvement for certain steps
-P_TRN = 1.0  # Probability of applying transformation
-P_ENH = 1.0  # Probability of applying enhancement
 INT_TRN = 0.1  # Intensity of randomness (for transform)
-INT_ENH = 0.2  # Intensity of randomness (for enhance)
 
 
-class OptTransform:
+class OptProjTran:
     """
     This class implements a generator for adversarial examples that are robust
     to certain transformations or variations. It is a modification from
@@ -117,12 +115,8 @@ class OptTransform:
         #init_val = np.random.normal(scale=init_scl, size=())
         init_val = tf.random_normal(
             ((1,) + INPUT_SHAPE), stddev=init_scl, dtype=tf.float32)
-        self.x_orig = K.placeholder(
-            dtype='float32', shape=((1,) + INPUT_SHAPE))
-        self.x = K.placeholder(
-            dtype='float32', shape=((self.batch_size,) + INPUT_SHAPE))
-        self.y = K.placeholder(
-            dtype='float32', shape=(self.batch_size, OUTPUT_DIM))
+        self.x = K.placeholder(dtype='float32', shape=((1,) + INPUT_SHAPE))
+        self.y = K.placeholder(dtype='float32', shape=(1, OUTPUT_DIM))
         if self.use_mask:
             self.m = K.placeholder(dtype='float32', shape=((1,) + INPUT_SHAPE))
 
@@ -132,10 +126,10 @@ class OptTransform:
             self.w = tf.Variable(initial_value=init_val, trainable=True,
                                  dtype=tf.float32)
             x_full = (0.5 + EPS) * (tf.tanh(self.w) + 1)
-            self.d = x_full - self.x_orig
+            self.d = x_full - self.x
             if self.use_mask:
                 self.d = tf.multiply(self.d, self.m)
-            self.x_in = self.x + self.d
+            self.x_d = self.x + self.d
             self.var_list = [self.w]
         else:
             # Optimize directly on d (perturbation)
@@ -147,8 +141,14 @@ class OptTransform:
             else:
                 self.x_in = self.x + self.d
             # Require clipping
-            self.x_in = tf.clip_by_value(self.x_in, 0, 1)
+            self.x_d = tf.clip_by_value(self.x_in, 0, 1)
             self.var_list = [self.d]
+
+        # Get x_in by transforming x_d by given transformation matrices
+        self.M = K.placeholder(dtype='float32', shape=((self.batch_size, 8)))
+        x_repeat = tf.tile(self.x_d, [self.batch_size, 1, 1, 1])
+        self.x_in = tf.contrib.image.transform(
+            x_repeat, self.M, interpolation='BILINEAR')
 
         model_output = self.model(self.x_in)
         self.model_output = model_output
@@ -160,8 +160,8 @@ class OptTransform:
             # Find z_i = max(Z[i != y])
             i_y = tf.argmax(self.y, axis=1, output_type=tf.int32)
             i_max = tf.to_int32(tf.argmax(model_output, axis=1))
-            z_i = tf.where(tf.equal(i_y, i_max), output_2max[:, 1],
-                           output_2max[:, 0])
+            z_i = tf.where(tf.equal(i_y, i_max),
+                           output_2max[:, 1], output_2max[:, 0])
             if self.target:
                 # TODO:
                 # loss = max(max(Z[i != t]) - Z[t], -K)
@@ -195,11 +195,36 @@ class OptTransform:
         self.norm = tf.maximum(norm, l)
         self._setup_opt()
 
-        # Initialize random transformer
-        seed = np.random.randint(1234)
-        self.rnd_transform = RandomTransform(
-            seed=seed, p=P_TRN, intensity=INT_TRN)
-        self.rnd_enhance = RandomEnhance(seed=seed, p=P_ENH, intensity=INT_ENH)
+    def _get_rand_transform_matrix(self, image_size, d, batch_size):
+
+        M = np.zeros((batch_size, 8))
+
+        for i in range(batch_size):
+            tl_top = random.uniform(-d, d)     # Top left corner, top
+            tl_left = random.uniform(-d, d)    # Top left corner, left
+            bl_bottom = random.uniform(-d, d)  # Bot left corner, bot
+            bl_left = random.uniform(-d, d)    # Bot left corner, left
+            tr_top = random.uniform(-d, d)     # Top right corner, top
+            tr_right = random.uniform(-d, d)   # Top right corner, right
+            br_bottom = random.uniform(-d, d)  # Bot right corner, bot
+            br_right = random.uniform(-d, d)   # Bot right corner, right
+
+            transform = ProjectiveTransform()
+            transform.estimate(np.array((
+                (tl_left, tl_top),
+                (bl_left, image_size - bl_bottom),
+                (image_size - br_right, image_size - br_bottom),
+                (image_size - tr_right, tr_top)
+            )), np.array((
+                (0, 0),
+                (0, image_size),
+                (image_size, image_size),
+                (image_size, 0)
+            )))
+
+            M[i] = transform.params.flatten()[:8]
+
+        return M
 
     def optimize(self, x, y, n_step=1000, prog=True, mask=None):
         """
@@ -233,24 +258,22 @@ class OptTransform:
             self.model.load_weights(WEIGTHS_PATH)
 
             # Create inputs to optimization
-            x_ = np.zeros((self.batch_size,) + INPUT_SHAPE)
-            x_orig_ = np.copy(x).reshape((1,) + INPUT_SHAPE)
-            y_ = np.repeat([y], self.batch_size, axis=0)
+            x_ = np.copy(x).reshape((1,) + INPUT_SHAPE)
+            y_ = np.copy(y).reshape((1, OUTPUT_DIM))
 
             # Generate a batch of transformed images
-            x_[0] = np.copy(x)
-            for i in range(1, self.batch_size):
-                tmp = self.rnd_transform.transform(x)
-                x_[i] = self.rnd_enhance.enhance(tmp)
+            M_ = self._get_rand_transform_matrix(
+                WIDTH, np.floor(WIDTH * INT_TRN), self.batch_size)
 
             # Include mask in feed_dict if mask is used
             if self.use_mask:
+                # Repeat mask for all channels
                 m_ = np.repeat(
                     mask[np.newaxis, :, :, np.newaxis], N_CHANNEL, axis=3)
-                feed_dict = {self.x: x_, self.y: y_, self.x_orig: x_orig_,
-                             self.m: m_, K.learning_phase(): False}
+                feed_dict = {self.x: x_, self.y: y_, self.M: M_, self.m: m_,
+                             K.learning_phase(): False}
             else:
-                feed_dict = {self.x: x_, self.y: y_, self.x_orig: x_orig_,
+                feed_dict = {self.x: x_, self.y: y_, self.M: M_,
                              K.learning_phase(): False}
 
             # Set up some variables for early stopping
@@ -264,6 +287,8 @@ class OptTransform:
                     self.optimizer.minimize(sess, feed_dict=feed_dict)
                 else:
                     sess.run(self.opt, feed_dict=feed_dict)
+                    #print(sess.run(self.model_output, feed_dict=feed_dict))
+                    #return sess.run(self.x_in, feed_dict=feed_dict)
 
                 # Keep track of "best" solution
                 if self.loss_op == 0:
@@ -293,12 +318,12 @@ class OptTransform:
                     #print(sess.run(self.model_output, feed_dict=feed_dict)[0])
 
             if min_d is not None:
-                x_adv = (x_orig_ + min_d).reshape(INPUT_SHAPE)
+                x_adv = (x_ + min_d).reshape(INPUT_SHAPE)
                 return x_adv, min_norm
             else:
                 d = sess.run(self.d, feed_dict=feed_dict)
                 norm = sess.run(self.norm, feed_dict=feed_dict)
-                x_adv = (x_orig_ + d).reshape(INPUT_SHAPE)
+                x_adv = (x_ + d).reshape(INPUT_SHAPE)
                 return x_adv, norm
 
     def optimize_search(self, x, y, n_step=1000, search_step=10, prog=True,

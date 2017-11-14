@@ -539,6 +539,78 @@ def fg_transform(model, x, y, mag_list, target=True, mask=None,
     return x_adv
 
 
+def iter_transform(model, x, y, norm="2", n_step=20, step_size=0.05,
+                   target=True, mask=None, batch_size=BATCH_SIZE):
+
+    P_TRN = 1.0  # Probability of applying transformation
+    P_ENH = 1.0  # Probability of applying enhancement
+    INT_TRN = 0.1  # Intensity of randomness (for transform)
+    INT_ENH = 0.2  # Intensity of randomness (for enhance)
+
+    # Initialize random transformer
+    seed = np.random.randint(1234)
+    rnd_transform = RandomTransform(seed=seed, p=P_TRN, intensity=INT_TRN)
+    rnd_enhance = RandomEnhance(seed=seed, p=P_ENH, intensity=INT_ENH)
+
+    grad_fn = gradient_fn(model)
+    start_time = time.time()
+    x_adv = np.copy(x)
+    losses = []
+    trans = []
+    factors = []
+
+    # Get a list of transformations
+    for _ in range(batch_size - 1):
+        _ = rnd_transform.transform(x_adv)
+        _ = rnd_enhance.enhance(x_adv)
+        trans.append(rnd_transform.get_last_transform())
+        factors.append(rnd_enhance.get_last_factors())
+
+    # Get mask with the same shape as gradient
+    if mask is not None:
+        mask_rep = np.repeat(mask[:, :, np.newaxis], N_CHANNEL, axis=2)
+    # Start update in steps
+    for _ in range(n_step):
+        if target is not None:
+            grad = -1 * gradient_input(grad_fn, x_adv, y)
+            for i in range(batch_size - 1):
+                x_trn = rnd_transform.apply_transform(x_adv, trans[i])
+                x_trn = rnd_enhance.enhance_factors(x_trn, factors[i])
+                grad += -1 * gradient_input(grad_fn, x_trn, y)
+            grad /= batch_size
+        else:
+            grad = gradient_input(grad_fn, x_adv, y)
+            for i in range(batch_size - 1):
+                x_trn = rnd_transform.apply_transform(x_adv, trans[i])
+                x_trn = rnd_enhance.enhance_factors(x_trn, factors[i])
+                grad += gradient_input(grad_fn, x_trn, y)
+            grad /= batch_size
+
+        if norm == "2":
+            try:
+                grad /= np.linalg.norm(grad)
+            except ZeroDivisionError:
+                raise
+        elif norm == "inf":
+            grad = np.sign(grad)
+        else:
+            raise ValueError("Invalid norm!")
+
+        # Apply mask
+        if mask is not None:
+            grad *= mask_rep
+
+        x_adv += grad * step_size
+        # Clip to stay in range [0, 1]
+        x_adv = np.clip(x_adv, 0, 1)
+
+        loss = model.evaluate(x_adv.reshape((1,) + INPUT_SHAPE),
+                              y.reshape(1, OUTPUT_DIM), verbose=0)[0]
+        losses.append(loss)
+
+    return x_adv, np.array(losses)
+
+
 def rnd_pgd(model, x, y, norm="2", n_step=40, step_size=0.01, target=True,
             mask=None, init_rnd=0.1):
     """

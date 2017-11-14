@@ -31,6 +31,10 @@ class RandomTransform():
         if seed is not None:
             self.seed = seed
             self.random.seed(seed)
+        self.last_tran = None
+
+    def get_last_transform(self):
+        return self.last_tran
 
     def transform(self, image, order=1):
         """
@@ -46,7 +50,8 @@ class RandomTransform():
                 5: Bi-quintic
         """
 
-        image_rotate = self.rotate(image)
+        #image_rotate = self.rotate(image)
+        image_rotate = image
         image_trans = self.apply_projection_transform(image_rotate, order)
 
         return image_trans
@@ -96,9 +101,18 @@ class RandomTransform():
                 (image_size, image_size),
                 (image_size, 0)
             )))
+            self.last_tran = transform
             image_trans = warp(image, transform,
                                output_shape=(image_size, image_size),
                                order=order, mode='edge')
             return image_trans
         else:
             return image
+
+    def apply_transform(self, image, transform, order=1):
+
+        image_size = image.shape[0]
+        image_trans = warp(image, transform,
+                           output_shape=(image_size, image_size),
+                           order=order, mode='edge')
+        return image_trans
