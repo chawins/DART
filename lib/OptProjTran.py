@@ -13,6 +13,11 @@ PROG_PRINT_STEPS = 200  # Print progress every certain steps
 EARLYSTOP_STEPS = 5000  # Early stopping if no improvement for certain steps
 INT_TRN = 0.1  # Intensity of randomness (for transform)
 
+DELTA_BRI = 0.3
+DELTA_HUE = 0.1
+LO_SAT = 0.2
+HI_SAT = 0.5
+
 
 class OptProjTran:
     """
@@ -146,10 +151,32 @@ class OptProjTran:
 
         # Get x_in by transforming x_d by given transformation matrices
         self.M = K.placeholder(dtype='float32', shape=((self.batch_size, 8)))
-        x_repeat = tf.tile(self.x_d, [self.batch_size, 1, 1, 1])
-        self.x_in = tf.contrib.image.transform(
-            x_repeat, self.M, interpolation='BILINEAR')
+        # TODO ---------------------------------------------------------------------
+        x_repeat = tf.tile(self.x, [self.batch_size, 1, 1, 1])
+        self.x_tran = tf.contrib.image.transform(x_repeat, self.M, 
+                                                 interpolation='BILINEAR')
+        # Randomly adjust brightness
+        #x_b = tf.image.random_brightness(self.x_tran, DELTA_BRI)
+        x_b = tf.map_fn(lambda img: tf.image.random_brightness(
+            img, DELTA_BRI), self.x_tran)
+        #x_b = tf.image.adjust_brightness(self.x_tran, DELTA_BRI)
+        self.x_b = tf.clip_by_value(x_b, 0, 1)        
+        #self.x_b = tf.map_fn(lambda img: self._rescale(img), x_b)
+        self.x_h = tf.map_fn(lambda img: tf.image.random_hue(
+            img, DELTA_HUE), self.x_b)
+        self.x_s = tf.map_fn(lambda img: tf.image.random_saturation(
+            img, LO_SAT, HI_SAT), self.x_h)
+        #self.x_c = tf.image.random_contrast(self.x_b, LO_CON, HI_CON)
+        #self.x_h = tf.image.random_hue(self.x_c, DELTA_HUE)
+        #self.x_s = tf.image.random_saturation(self.x_h, LO_SAT, HI_SAT)
 
+        # Upsample and downsample
+        self.x_up = tf.image.resize_images(
+            self.x_s, [600, 600], method=tf.image.ResizeMethod.BILINEAR)
+        self.x_down = tf.image.resize_images(
+            self.x_up, [32, 32], method=tf.image.ResizeMethod.BILINEAR)
+
+        self.x_in = self.x_down
         model_output = self.model(self.x_in)
         self.model_output = model_output
 
@@ -194,6 +221,10 @@ class OptProjTran:
         # Encourage norm to be larger than some value
         self.norm = tf.maximum(norm, l)
         self._setup_opt()
+
+    def _rescale(self, img):
+        return ((img - tf.reduce_min(img)) /
+                (tf.reduce_max(img) - tf.reduce_min(img)))
 
     def _get_rand_transform_matrix(self, image_size, d, batch_size):
 
@@ -288,7 +319,11 @@ class OptProjTran:
                 else:
                     sess.run(self.opt, feed_dict=feed_dict)
                     #print(sess.run(self.model_output, feed_dict=feed_dict))
-                    #return sess.run(self.x_in, feed_dict=feed_dict)
+                    x_tran = sess.run(self.x_tran, feed_dict=feed_dict)
+                    x_b = sess.run(self.x_b, feed_dict=feed_dict)
+                    x_up = sess.run(self.x_up, feed_dict=feed_dict)
+                    x_down = sess.run(self.x_down, feed_dict=feed_dict)
+                    return [x_tran, x_b, x_up, x_down]
 
                 # Keep track of "best" solution
                 if self.loss_op == 0:

@@ -572,11 +572,13 @@ def iter_transform(model, x, y, norm="2", n_step=20, step_size=0.05,
     # Start update in steps
     for _ in range(n_step):
         if target is not None:
+            # Sum gradient over the entire batch of transformed images
             grad = -1 * gradient_input(grad_fn, x_adv, y)
             for i in range(batch_size - 1):
                 x_trn = rnd_transform.apply_transform(x_adv, trans[i])
                 x_trn = rnd_enhance.enhance_factors(x_trn, factors[i])
                 grad += -1 * gradient_input(grad_fn, x_trn, y)
+            # Average by batch size
             grad /= batch_size
         else:
             grad = gradient_input(grad_fn, x_adv, y)
@@ -586,6 +588,7 @@ def iter_transform(model, x, y, norm="2", n_step=20, step_size=0.05,
                 grad += gradient_input(grad_fn, x_trn, y)
             grad /= batch_size
 
+        # Normalize gradient by specified norm
         if norm == "2":
             try:
                 grad /= np.linalg.norm(grad)
@@ -604,6 +607,7 @@ def iter_transform(model, x, y, norm="2", n_step=20, step_size=0.05,
         # Clip to stay in range [0, 1]
         x_adv = np.clip(x_adv, 0, 1)
 
+        # Also save progress of loss
         loss = model.evaluate(x_adv.reshape((1,) + INPUT_SHAPE),
                               y.reshape(1, OUTPUT_DIM), verbose=0)[0]
         losses.append(loss)

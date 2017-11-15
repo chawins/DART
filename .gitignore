@@ -9,6 +9,7 @@ test_*
 Stop_Sign_Dataset/
 parameters*
 save*
+nohup.out
 
 # OS generated files #
 ######################
