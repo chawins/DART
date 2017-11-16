@@ -187,6 +187,8 @@ class OptTransform:
         # Regularization term with l2-norm
         if p_norm == "2":
             norm = tf.norm(self.d, ord='euclidean')
+        elif p_norm == "1":
+            norm = tf.norm(self.d, ord=1)
         elif p_norm == "inf":
             norm = tf.norm(self.d, ord=np.inf)
         else:

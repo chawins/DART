@@ -11,9 +11,9 @@ MAX_CP = 2.   # Maximum power index of c
 SCORE_THRES = 0.99  # Softmax score threshold to consider success of attacks
 PROG_PRINT_STEPS = 200  # Print progress every certain steps
 EARLYSTOP_STEPS = 5000  # Early stopping if no improvement for certain steps
-INT_TRN = 0.1  # Intensity of randomness (for transform)
+INT_TRN = 0.07  # Intensity of randomness (for transform)
 
-DELTA_BRI = 0.3
+DELTA_BRI = 0.15
 DELTA_HUE = 0.1
 LO_SAT = 0.2
 HI_SAT = 0.5
@@ -117,7 +117,7 @@ class OptProjTran:
         self.batch_size = batch_size
 
         # Initialize variables
-        #init_val = np.random.normal(scale=init_scl, size=())
+        # init_val = np.random.normal(scale=init_scl, size=())
         init_val = tf.random_normal(
             ((1,) + INPUT_SHAPE), stddev=init_scl, dtype=tf.float32)
         self.x = K.placeholder(dtype='float32', shape=((1,) + INPUT_SHAPE))
@@ -151,28 +151,25 @@ class OptProjTran:
 
         # Get x_in by transforming x_d by given transformation matrices
         self.M = K.placeholder(dtype='float32', shape=((self.batch_size, 8)))
-        # TODO ---------------------------------------------------------------------
-        x_repeat = tf.tile(self.x, [self.batch_size, 1, 1, 1])
-        self.x_tran = tf.contrib.image.transform(x_repeat, self.M, 
+        x_repeat = tf.tile(self.x_d, [self.batch_size, 1, 1, 1])
+        self.x_tran = tf.contrib.image.transform(x_repeat, self.M,
                                                  interpolation='BILINEAR')
+
         # Randomly adjust brightness
-        #x_b = tf.image.random_brightness(self.x_tran, DELTA_BRI)
-        x_b = tf.map_fn(lambda img: tf.image.random_brightness(
-            img, DELTA_BRI), self.x_tran)
-        #x_b = tf.image.adjust_brightness(self.x_tran, DELTA_BRI)
-        self.x_b = tf.clip_by_value(x_b, 0, 1)        
-        #self.x_b = tf.map_fn(lambda img: self._rescale(img), x_b)
-        self.x_h = tf.map_fn(lambda img: tf.image.random_hue(
-            img, DELTA_HUE), self.x_b)
-        self.x_s = tf.map_fn(lambda img: tf.image.random_saturation(
-            img, LO_SAT, HI_SAT), self.x_h)
-        #self.x_c = tf.image.random_contrast(self.x_b, LO_CON, HI_CON)
-        #self.x_h = tf.image.random_hue(self.x_c, DELTA_HUE)
-        #self.x_s = tf.image.random_saturation(self.x_h, LO_SAT, HI_SAT)
+        b = np.multiply((2 * np.random.rand(batch_size, 1) - 1) * DELTA_BRI,
+                        np.ones(shape=(batch_size, N_FEATURE)))
+        b = b.reshape((batch_size,) + INPUT_SHAPE)
+        delta = tf.Variable(initial_value=b, trainable=False, dtype=tf.float32)
+        self.x_b = tf.clip_by_value(self.x_tran + delta, 0, 1)
+        # self.x_b = tf.map_fn(lambda img: self._rescale(img), x_b)
+        # self.x_h = tf.map_fn(lambda img: tf.image.random_hue(
+        #     img, DELTA_HUE), self.x_b)
+        # self.x_s = tf.map_fn(lambda img: tf.image.random_saturation(
+        #     img, LO_SAT, HI_SAT), self.x_h)
 
         # Upsample and downsample
         self.x_up = tf.image.resize_images(
-            self.x_s, [600, 600], method=tf.image.ResizeMethod.BILINEAR)
+            self.x_b, [600, 600], method=tf.image.ResizeMethod.BILINEAR)
         self.x_down = tf.image.resize_images(
             self.x_up, [32, 32], method=tf.image.ResizeMethod.BILINEAR)
 
@@ -214,6 +211,9 @@ class OptProjTran:
         # Regularization term with l2-norm
         if p_norm == "2":
             norm = tf.norm(self.d, ord='euclidean')
+        elif p_norm == "1":
+            norm = tf.norm(self.d, ord=1)
+            #norm = tf.reduce_sum(tf.maximum(tf.abs(self.d) - THRES, 0))
         elif p_norm == "inf":
             norm = tf.norm(self.d, ord=np.inf)
         else:
@@ -221,10 +221,6 @@ class OptProjTran:
         # Encourage norm to be larger than some value
         self.norm = tf.maximum(norm, l)
         self._setup_opt()
-
-    def _rescale(self, img):
-        return ((img - tf.reduce_min(img)) /
-                (tf.reduce_max(img) - tf.reduce_min(img)))
 
     def _get_rand_transform_matrix(self, image_size, d, batch_size):
 
@@ -318,12 +314,14 @@ class OptProjTran:
                     self.optimizer.minimize(sess, feed_dict=feed_dict)
                 else:
                     sess.run(self.opt, feed_dict=feed_dict)
-                    #print(sess.run(self.model_output, feed_dict=feed_dict))
-                    x_tran = sess.run(self.x_tran, feed_dict=feed_dict)
-                    x_b = sess.run(self.x_b, feed_dict=feed_dict)
-                    x_up = sess.run(self.x_up, feed_dict=feed_dict)
-                    x_down = sess.run(self.x_down, feed_dict=feed_dict)
-                    return [x_tran, x_b, x_up, x_down]
+                    # print(sess.run(self.model_output, feed_dict=feed_dict))
+                    # x_tran = sess.run(self.x_tran, feed_dict=feed_dict)
+                    # x_b = sess.run(self.x_b, feed_dict=feed_dict)
+                    #x_h = sess.run(self.x_h, feed_dict=feed_dict)
+                    #x_s = sess.run(self.x_s, feed_dict=feed_dict)
+                    # x_up = sess.run(self.x_up, feed_dict=feed_dict)
+                    # x_down = sess.run(self.x_down, feed_dict=feed_dict)
+                    # return [x_tran, x_b, x_up, x_down]
 
                 # Keep track of "best" solution
                 if self.loss_op == 0:
@@ -350,7 +348,7 @@ class OptProjTran:
                     loss = sess.run(self.loss, feed_dict=feed_dict)
                     print("Step: {}, norm={:.3f}, loss={:.3f}, obj={:.3f}".format(
                         step, norm, loss, f))
-                    #print(sess.run(self.model_output, feed_dict=feed_dict)[0])
+                    # print(sess.run(self.model_output, feed_dict=feed_dict)[0])
 
             if min_d is not None:
                 x_adv = (x_ + min_d).reshape(INPUT_SHAPE)
