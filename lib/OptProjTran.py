@@ -14,9 +14,7 @@ EARLYSTOP_STEPS = 5000  # Early stopping if no improvement for certain steps
 INT_TRN = 0.07  # Intensity of randomness (for transform)
 
 DELTA_BRI = 0.15
-DELTA_HUE = 0.1
-LO_SAT = 0.2
-HI_SAT = 0.5
+THRES = 0.1
 
 
 class OptProjTran:
@@ -115,15 +113,16 @@ class OptProjTran:
         self.use_mask = use_mask
         self.decay = decay
         self.batch_size = batch_size
+        self.var_change = var_change
+        self.init_scl = init_scl
 
         # Initialize variables
-        # init_val = np.random.normal(scale=init_scl, size=())
-        init_val = tf.random_normal(
-            ((1,) + INPUT_SHAPE), stddev=init_scl, dtype=tf.float32)
-        self.x = K.placeholder(dtype='float32', shape=((1,) + INPUT_SHAPE))
-        self.y = K.placeholder(dtype='float32', shape=(1, OUTPUT_DIM))
+        init_val = tf.random_uniform(INPUT_SHAPE, minval=-init_scl,
+                                     maxval=init_scl, dtype=tf.float32)
+        self.x = K.placeholder(name='x', dtype='float32', shape=INPUT_SHAPE)
+        self.y = K.placeholder(name='y', dtype='float32', shape=(1, OUTPUT_DIM))
         if self.use_mask:
-            self.m = K.placeholder(dtype='float32', shape=((1,) + INPUT_SHAPE))
+            self.m = K.placeholder(name='m', dtype='float32', shape=INPUT_SHAPE)
 
         # If change of variable is specified
         if var_change:
@@ -150,7 +149,7 @@ class OptProjTran:
             self.var_list = [self.d]
 
         # Get x_in by transforming x_d by given transformation matrices
-        self.M = K.placeholder(dtype='float32', shape=((self.batch_size, 8)))
+        self.M = K.placeholder(name='M', dtype='float32', shape=((self.batch_size, 8)))
         x_repeat = tf.tile(self.x_d, [self.batch_size, 1, 1, 1])
         self.x_tran = tf.contrib.image.transform(x_repeat, self.M,
                                                  interpolation='BILINEAR')
@@ -158,7 +157,7 @@ class OptProjTran:
         # Randomly adjust brightness
         b = np.multiply((2 * np.random.rand(batch_size, 1) - 1) * DELTA_BRI,
                         np.ones(shape=(batch_size, N_FEATURE)))
-        b = b.reshape((batch_size,) + INPUT_SHAPE)
+        b = b.reshape((batch_size,) + IMG_SHAPE)
         delta = tf.Variable(initial_value=b, trainable=False, dtype=tf.float32)
         self.x_b = tf.clip_by_value(self.x_tran + delta, 0, 1)
         # self.x_b = tf.map_fn(lambda img: self._rescale(img), x_b)
@@ -184,18 +183,16 @@ class OptProjTran:
             # Find z_i = max(Z[i != y])
             i_y = tf.argmax(self.y, axis=1, output_type=tf.int32)
             i_max = tf.to_int32(tf.argmax(model_output, axis=1))
-            z_i = tf.where(tf.equal(i_y, i_max),
-                           output_2max[:, 1], output_2max[:, 0])
+            z_i = tf.where(tf.equal(i_y, i_max), output_2max[:, 1],
+                           output_2max[:, 0])
             if self.target:
-                # TODO:
                 # loss = max(max(Z[i != t]) - Z[t], -K)
-                loss_sum = tf.reduce_sum(z_i - model_output[:, i_y[0]])
+                loss = tf.maximum(z_i - model_output[:, i_y[0]], -self.k)
             else:
                 # loss = max(Z[y] - max(Z[i != y]), -K)
-                loss_sum = tf.reduce_sum(model_output[:, i_y[0]] - z_i)
+                loss = tf.maximum(model_output[:, i_y[0]] - z_i, -self.k)
             # Average across batch
-            loss_avg = loss_sum / self.batch_size
-            self.loss = tf.maximum(loss_avg, -self.k)
+            self.loss = tf.reduce_sum(loss) / self.batch_size
         elif loss_op == 1:
             # Cross entropy loss, loss = -log(F(x_t))
             loss_all = K.categorical_crossentropy(
@@ -212,8 +209,8 @@ class OptProjTran:
         if p_norm == "2":
             norm = tf.norm(self.d, ord='euclidean')
         elif p_norm == "1":
-            norm = tf.norm(self.d, ord=1)
-            #norm = tf.reduce_sum(tf.maximum(tf.abs(self.d) - THRES, 0))
+            #norm = tf.norm(self.d, ord=1)
+            norm = tf.reduce_sum(tf.maximum(tf.abs(self.d) - THRES, 0))
         elif p_norm == "inf":
             norm = tf.norm(self.d, ord=np.inf)
         else:
@@ -280,12 +277,8 @@ class OptProjTran:
 
         with tf.Session() as sess:
 
-            # Initialize variables and load weights
-            sess.run(tf.global_variables_initializer())
-            self.model.load_weights(WEIGTHS_PATH)
-
             # Create inputs to optimization
-            x_ = np.copy(x).reshape((1,) + INPUT_SHAPE)
+            x_ = np.copy(x).reshape(INPUT_SHAPE)
             y_ = np.copy(y).reshape((1, OUTPUT_DIM))
 
             # Generate a batch of transformed images
@@ -302,6 +295,16 @@ class OptProjTran:
             else:
                 feed_dict = {self.x: x_, self.y: y_, self.M: M_,
                              K.learning_phase(): False}
+
+            # Initialize variables and load weights
+            sess.run(tf.global_variables_initializer())
+            self.model.load_weights(WEIGTHS_PATH)
+            if self.var_change:
+                # Initialize w here to be within L1-ball center at rctanh(2x-1)
+                init_rand = np.random.uniform(
+                    -self.init_scl, self.init_scl, size=INPUT_SHAPE)
+                init_w = np.arctanh((x_ + EPS) * 2 - 1) + init_rand
+                self.w.load(init_w)
 
             # Set up some variables for early stopping
             min_norm = float("inf")
@@ -351,12 +354,12 @@ class OptProjTran:
                     # print(sess.run(self.model_output, feed_dict=feed_dict)[0])
 
             if min_d is not None:
-                x_adv = (x_ + min_d).reshape(INPUT_SHAPE)
+                x_adv = (x_ + min_d).reshape(IMG_SHAPE)
                 return x_adv, min_norm
             else:
                 d = sess.run(self.d, feed_dict=feed_dict)
                 norm = sess.run(self.norm, feed_dict=feed_dict)
-                x_adv = (x_ + d).reshape(INPUT_SHAPE)
+                x_adv = (x_ + d).reshape(IMG_SHAPE)
                 return x_adv, norm
 
     def optimize_search(self, x, y, n_step=1000, search_step=10, prog=True,
@@ -411,7 +414,7 @@ class OptProjTran:
                 x, y, n_step=n_step, prog=False, mask=mask)
 
             # Evaluate result
-            y_pred = self.model.predict(x_adv.reshape((1,) + INPUT_SHAPE))[0]
+            y_pred = self.model.predict(x_adv.reshape(INPUT_SHAPE))[0]
             score = softmax(y_pred)[np.argmax(y)]
             if self.target:
                 if score > SCORE_THRES:

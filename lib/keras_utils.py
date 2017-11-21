@@ -23,7 +23,7 @@ def built_mltscl():
     l2_reg = keras.regularizers.l2(L2_LAMBDA)
 
     # Build model
-    inpt = keras.layers.Input(shape=INPUT_SHAPE)
+    inpt = keras.layers.Input(shape=IMG_SHAPE)
     conv1 = keras.layers.Convolution2D(
         32, (5, 5), padding='same', activation='relu')(inpt)
     drop1 = keras.layers.Dropout(rate=0.1)(conv1)
@@ -67,7 +67,7 @@ def built_mltscl():
 def gradient_fn(model):
     """Return gradient function of model's loss w.r.t. input"""
 
-    x_in = K.placeholder(dtype=tf.float32, shape=((1,) + INPUT_SHAPE))
+    x_in = K.placeholder(dtype=tf.float32, shape=INPUT_SHAPE)
     y_true = K.placeholder(shape=(OUTPUT_DIM, ))
     loss = K.categorical_crossentropy(y_true, model(x_in)[0], from_logits=True)
     grad = K.gradients(loss, x_in)
@@ -78,4 +78,4 @@ def gradient_fn(model):
 def gradient_input(grad_fn, x, y):
     """Wrapper function to use gradient function more cleanly"""
 
-    return grad_fn([x.reshape((1,) + INPUT_SHAPE), y, 0])[0][0]
+    return grad_fn([x.reshape(INPUT_SHAPE), y, 0])[0][0]

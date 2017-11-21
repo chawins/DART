@@ -135,7 +135,7 @@ def to_class(y):
 def predict(model, x):
     """Use model to predict class of x"""
 
-    y = to_class(model.predict(x.reshape((-1,) + INPUT_SHAPE)))
+    y = to_class(model.predict(x.reshape(INPUT_SHAPE)))
     if x.ndim == 3:
         return y[0]
     else:
@@ -608,7 +608,7 @@ def iter_transform(model, x, y, norm="2", n_step=20, step_size=0.05,
         x_adv = np.clip(x_adv, 0, 1)
 
         # Also save progress of loss
-        loss = model.evaluate(x_adv.reshape((1,) + INPUT_SHAPE),
+        loss = model.evaluate(x_adv.reshape(INPUT_SHAPE),
                               y.reshape(1, OUTPUT_DIM), verbose=0)[0]
         losses.append(loss)
 

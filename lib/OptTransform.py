@@ -15,6 +15,8 @@ P_ENH = 1.0  # Probability of applying enhancement
 INT_TRN = 0.1  # Intensity of randomness (for transform)
 INT_ENH = 0.2  # Intensity of randomness (for enhance)
 
+THRES = 0.1
+
 
 class OptTransform:
     """
@@ -188,7 +190,8 @@ class OptTransform:
         if p_norm == "2":
             norm = tf.norm(self.d, ord='euclidean')
         elif p_norm == "1":
-            norm = tf.norm(self.d, ord=1)
+            #norm = tf.norm(self.d, ord=1)
+            norm = tf.reduce_sum(tf.maximum(tf.abs(self.d) - THRES, 0))
         elif p_norm == "inf":
             norm = tf.norm(self.d, ord=np.inf)
         else:

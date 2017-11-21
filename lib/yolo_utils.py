@@ -43,12 +43,12 @@ def gradient_input(grad_fn, x, target_conf=None, target_class=None):
     """Wrapper function to use gradient function more cleanly"""
 
     if target_conf is not None and target_class is not None:
-        return grad_fn([x.reshape((1,) + INPUT_SHAPE), target_conf,
+        return grad_fn([x.reshape(INPUT_SHAPE), target_conf,
                         target_class, 0])[0][0]
     elif target_conf is not None:
-        return grad_fn([x.reshape((1,) + INPUT_SHAPE), target_conf, 0])[0][0]
+        return grad_fn([x.reshape(INPUT_SHAPE), target_conf, 0])[0][0]
     elif target_class is not None:
-        return grad_fn([x.reshape((1,) + INPUT_SHAPE), target_class, 0])[0][0]
+        return grad_fn([x.reshape(INPUT_SHAPE), target_class, 0])[0][0]
     else:
         return None
 

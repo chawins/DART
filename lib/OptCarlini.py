@@ -98,11 +98,11 @@ class OptCarlini:
         self.use_mask = use_mask
 
         # Initialize variables
-        init_val = np.random.normal(scale=init_scl, size=((1,) + INPUT_SHAPE))
-        self.x = K.placeholder(dtype='float32', shape=((1,) + INPUT_SHAPE))
+        init_val = np.random.normal(scale=init_scl, size=INPUT_SHAPE)
+        self.x = K.placeholder(dtype='float32', shape=INPUT_SHAPE)
         self.y = K.placeholder(dtype='float32', shape=(1, OUTPUT_DIM))
         if self.use_mask:
-            self.m = K.placeholder(dtype='float32', shape=((1,) + INPUT_SHAPE))
+            self.m = K.placeholder(dtype='float32', shape=INPUT_SHAPE)
 
         # If change of variable is specified
         if var_change:
@@ -189,7 +189,7 @@ class OptCarlini:
             self.model.load_weights(WEIGTHS_PATH)
 
             # Ensure that shape is correct
-            x_ = np.copy(x).reshape((1,) + INPUT_SHAPE)
+            x_ = np.copy(x).reshape(INPUT_SHAPE)
             y_ = np.copy(y).reshape((1, OUTPUT_DIM))
 
             # Include mask in feed_dict if mask is used
@@ -240,12 +240,12 @@ class OptCarlini:
                         step, norm, loss, f))
 
             if min_d is not None:
-                x_adv = (x_ + min_d).reshape(INPUT_SHAPE)
+                x_adv = (x_ + min_d).reshape(IMG_SHAPE)
                 return x_adv, min_norm
             else:
                 d = sess.run(self.d, feed_dict=feed_dict)
                 norm = sess.run(self.norm, feed_dict=feed_dict)
-                x_adv = (x_ + d).reshape(INPUT_SHAPE)
+                x_adv = (x_ + d).reshape(IMG_SHAPE)
                 return x_adv, norm
 
     def optimize_search(self, x, y, n_step=1000, search_step=10, prog=True,
@@ -299,7 +299,7 @@ class OptCarlini:
                 x, y, n_step=n_step, prog=False, mask=mask)
 
             # Evaluate result
-            y_pred = self.model.predict(x_adv.reshape((1,) + INPUT_SHAPE))[0]
+            y_pred = self.model.predict(x_adv.reshape(INPUT_SHAPE))[0]
             score = softmax(y_pred)[np.argmax(y)]
             if self.target:
                 if score > SCORE_THRES:
