@@ -3,7 +3,7 @@ This is a separate utility class for attacking YOLO detector specifically
 """
 
 from parameters_yolo import *
-from test_detector.yad2k.yad2k.models.keras_yolo import yolo_head
+from attack_detector.yad2k.models.keras_yolo import yolo_head
 
 
 def gradient_yolo(yolo_model, anchors, op=0):

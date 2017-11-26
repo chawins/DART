@@ -10,11 +10,11 @@ MIN_CP = -2.  # Minimum power index of c
 MAX_CP = 2.   # Maximum power index of c
 SCORE_THRES = 0.99  # Softmax score threshold to consider success of attacks
 PROG_PRINT_STEPS = 200  # Print progress every certain steps
-EARLYSTOP_STEPS = 5000  # Early stopping if no improvement for certain steps
+EARLYSTOP_STEPS = 1000  # Early stopping if no improvement for certain steps
 INT_TRN = 0.07  # Intensity of randomness (for transform)
 
 DELTA_BRI = 0.15
-THRES = 0.1
+THRES = 0.05
 
 
 class OptProjTran:
@@ -57,8 +57,9 @@ class OptProjTran:
                 self.f, var_list=self.var_list, global_step=global_step)
 
     def __init__(self, model, target=True, c=1, lr=0.01, init_scl=0.1,
-                 use_bound=False, loss_op=0, k=5, var_change=True, p_norm="2",
-                 l=0, use_mask=True, decay=True, batch_size=BATCH_SIZE):
+                 use_bound=False, loss_op=0, k=5, var_change=True, p_norm="1",
+                 l=0, use_mask=True, decay=True, batch_size=BATCH_SIZE,
+                 sp_size=None, rnd_tran=INT_TRN, rnd_bri=DELTA_BRI):
         """
         Initialize the optimizer. Default values of the parameters are
         recommended and decided specifically for attacking traffic sign
@@ -115,14 +116,17 @@ class OptProjTran:
         self.batch_size = batch_size
         self.var_change = var_change
         self.init_scl = init_scl
+        self.rnd_tran = rnd_tran
 
         # Initialize variables
         init_val = tf.random_uniform(INPUT_SHAPE, minval=-init_scl,
                                      maxval=init_scl, dtype=tf.float32)
         self.x = K.placeholder(name='x', dtype='float32', shape=INPUT_SHAPE)
-        self.y = K.placeholder(name='y', dtype='float32', shape=(1, OUTPUT_DIM))
+        self.y = K.placeholder(name='y', dtype='float32',
+                               shape=(1, OUTPUT_DIM))
         if self.use_mask:
-            self.m = K.placeholder(name='m', dtype='float32', shape=INPUT_SHAPE)
+            self.m = K.placeholder(
+                name='m', dtype='float32', shape=INPUT_SHAPE)
 
         # If change of variable is specified
         if var_change:
@@ -149,30 +153,34 @@ class OptProjTran:
             self.var_list = [self.d]
 
         # Get x_in by transforming x_d by given transformation matrices
-        self.M = K.placeholder(name='M', dtype='float32', shape=((self.batch_size, 8)))
+        self.M = K.placeholder(name='M', dtype='float32',
+                               shape=(self.batch_size, 8))
         x_repeat = tf.tile(self.x_d, [self.batch_size, 1, 1, 1])
         self.x_tran = tf.contrib.image.transform(x_repeat, self.M,
                                                  interpolation='BILINEAR')
 
         # Randomly adjust brightness
-        b = np.multiply((2 * np.random.rand(batch_size, 1) - 1) * DELTA_BRI,
+        b = np.multiply((2 * np.random.rand(batch_size, 1) - 1) * rnd_bri,
                         np.ones(shape=(batch_size, N_FEATURE)))
         b = b.reshape((batch_size,) + IMG_SHAPE)
         delta = tf.Variable(initial_value=b, trainable=False, dtype=tf.float32)
         self.x_b = tf.clip_by_value(self.x_tran + delta, 0, 1)
-        # self.x_b = tf.map_fn(lambda img: self._rescale(img), x_b)
-        # self.x_h = tf.map_fn(lambda img: tf.image.random_hue(
-        #     img, DELTA_HUE), self.x_b)
-        # self.x_s = tf.map_fn(lambda img: tf.image.random_saturation(
-        #     img, LO_SAT, HI_SAT), self.x_h)
 
         # Upsample and downsample
-        self.x_up = tf.image.resize_images(
-            self.x_b, [600, 600], method=tf.image.ResizeMethod.BILINEAR)
-        self.x_down = tf.image.resize_images(
-            self.x_up, [32, 32], method=tf.image.ResizeMethod.BILINEAR)
+        def resize(x):
+            tmp = tf.image.resize_images(
+                x[0], x[1], method=tf.image.ResizeMethod.BILINEAR)
+            return tf.image.resize_images(
+                tmp, [HEIGHT, WIDTH], method=tf.image.ResizeMethod.BILINEAR)
 
-        self.x_in = self.x_down
+        # Set upsampling size to be 600x600 if not specified
+        if sp_size is None:
+            sp_size = np.zeros((batch_size, 2)) + 600
+        up_size = tf.constant(sp_size, dtype=tf.int32)
+        # Use map_fn to do random resampling for each image
+        self.x_rs = tf.map_fn(resize, (self.x_b, up_size), dtype=tf.float32)
+
+        self.x_in = self.x_rs
         model_output = self.model(self.x_in)
         self.model_output = model_output
 
@@ -283,7 +291,7 @@ class OptProjTran:
 
             # Generate a batch of transformed images
             M_ = self._get_rand_transform_matrix(
-                WIDTH, np.floor(WIDTH * INT_TRN), self.batch_size)
+                WIDTH, np.floor(WIDTH * self.rnd_tran), self.batch_size)
 
             # Include mask in feed_dict if mask is used
             if self.use_mask:
@@ -303,8 +311,11 @@ class OptProjTran:
                 # Initialize w here to be within L1-ball center at rctanh(2x-1)
                 init_rand = np.random.uniform(
                     -self.init_scl, self.init_scl, size=INPUT_SHAPE)
-                init_w = np.arctanh((x_ + EPS) * 2 - 1) + init_rand
+                # Clip values to remove numerical error atanh(1) or atanh(-1)
+                tanhw = np.clip(x_ * 2 - 1, -1 + EPS, 1 - EPS)
+                init_w = np.arctanh(tanhw) + init_rand
                 self.w.load(init_w)
+                # self.w.load(init_rand)
 
             # Set up some variables for early stopping
             min_norm = float("inf")
@@ -317,21 +328,13 @@ class OptProjTran:
                     self.optimizer.minimize(sess, feed_dict=feed_dict)
                 else:
                     sess.run(self.opt, feed_dict=feed_dict)
-                    # print(sess.run(self.model_output, feed_dict=feed_dict))
-                    # x_tran = sess.run(self.x_tran, feed_dict=feed_dict)
-                    # x_b = sess.run(self.x_b, feed_dict=feed_dict)
-                    #x_h = sess.run(self.x_h, feed_dict=feed_dict)
-                    #x_s = sess.run(self.x_s, feed_dict=feed_dict)
-                    # x_up = sess.run(self.x_up, feed_dict=feed_dict)
-                    # x_down = sess.run(self.x_down, feed_dict=feed_dict)
-                    # return [x_tran, x_b, x_up, x_down]
 
                 # Keep track of "best" solution
                 if self.loss_op == 0:
                     norm = sess.run(self.norm, feed_dict=feed_dict)
                     loss = sess.run(self.loss, feed_dict=feed_dict)
                     # Save working adversarial example with smallest norm
-                    if loss == -self.k:
+                    if loss < -0.95 * self.k:
                         if norm < min_norm:
                             min_norm = norm
                             min_d = sess.run(self.d, feed_dict=feed_dict)

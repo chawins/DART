@@ -1,22 +1,28 @@
+import random
+
 from lib.keras_utils import *
 from lib.utils import *
-from parameters_yolo import *
-from attack_detector.yad2k.models.keras_yolo import yolo_head
+from parameters import *
+from skimage.transform import ProjectiveTransform
 
 EPS = 1e-10   # Epsilon
 MIN_CP = -2.  # Minimum power index of c
 MAX_CP = 2.   # Maximum power index of c
-SCORE_THRES = 0.5  # Softmax score threshold to consider success of attacks
-PROG_PRINT_STEPS = 50  # Print progress every certain steps
-EARLYSTOP_STEPS = 5000  # Early stopping if no improvement for certain steps
+SCORE_THRES = 0.99  # Softmax score threshold to consider success of attacks
+PROG_PRINT_STEPS = 200  # Print progress every certain steps
+EARLYSTOP_STEPS = 1000  # Early stopping if no improvement for certain steps
+INT_TRN = 0  # Intensity of randomness (for transform)
+
+DELTA_BRI = 0.15
+THRES = 0.05
 
 
-class OptYolo:
+class OptTest1:
     """
-    This class implements adversarial examples generator modeled after Carlini
-    et al. (https://arxiv.org/abs/1608.04644). It also includes options to use
-    other losses, change of variable, optimizer with bounding box (L-BFGS-B,
-    etc.) and mask.
+    This class implements a generator for adversarial examples that are robust
+    to certain transformations or variations. It is a modification from
+    Carlini et al. (https://arxiv.org/abs/1608.04644) and Athalye et al.
+    (https://arxiv.org/abs/1707.07397)
     """
 
     def _setup_opt(self):
@@ -34,19 +40,26 @@ class OptYolo:
         else:
             # Use learning rate decay
             global_step = tf.Variable(0, trainable=False)
-            # decay_lr = tf.train.exponential_decay(
-            #   self.lr, global_step, 500, 0.95, staircase=True)
-            decay_lr = tf.train.inverse_time_decay(
-                self.lr, global_step, 10, 0.01)
+
+            if self.decay:
+                # lr = tf.train.exponential_decay(
+                #     self.lr, global_step, 100, 0.95, staircase=False)
+                lr = tf.train.inverse_time_decay(
+                    self.lr, global_step, 50, 0.01, staircase=True)
+            else:
+                lr = self.lr
             # Use Adam optimizer
             self.optimizer = tf.train.AdamOptimizer(
-                learning_rate=decay_lr, beta1=0.9, beta2=0.999, epsilon=1e-08)
+                learning_rate=lr, beta1=0.9, beta2=0.999, epsilon=1e-08)
+            # self.optimizer = tf.train.GradientDescentOptimizer(
+            #     learning_rate=lr)
             self.opt = self.optimizer.minimize(
                 self.f, var_list=self.var_list, global_step=global_step)
 
-    def __init__(self, model, anchors, target=True, c=1, lr=0.01, init_scl=0.1,
-                 use_bound=False, loss_op=0, k=5, var_change=True,
-                 use_mask=True):
+    def __init__(self, model, target=True, c=1, lr=0.01, init_scl=0.1,
+                 use_bound=False, loss_op=0, k=5, var_change=True, p_norm="2",
+                 l=0, use_mask=True, decay=True, batch_size=BATCH_SIZE, 
+                 sp_size=None):
         """
         Initialize the optimizer. Default values of the parameters are
         recommended and decided specifically for attacking traffic sign
@@ -87,6 +100,8 @@ class OptYolo:
                      if True, perturbation will be masked before applying to
                      the target sign. Mask must be specified when calling
                      optimize() and optimize_search().
+        batch_size : (optional) int (default: BATCH_SIZE)
+                     Define number of transformed images to use
         """
 
         self.model = model
@@ -97,13 +112,18 @@ class OptYolo:
         self.loss_op = loss_op
         self.k = k
         self.use_mask = use_mask
+        self.decay = decay
+        self.batch_size = batch_size
+        self.var_change = var_change
+        self.init_scl = init_scl
 
         # Initialize variables
-        init_val = np.random.normal(scale=init_scl, size=NPUT_SHAPE)
-        self.x = K.placeholder(dtype='float32', shape=INPUT_SHAPE)
-        self.y = K.placeholder(dtype='float32', shape=(1, 19, 19, 5, 80))
+        init_val = tf.random_uniform(INPUT_SHAPE, minval=-init_scl,
+                                     maxval=init_scl, dtype=tf.float32)
+        self.x = K.placeholder(name='x', dtype='float32', shape=INPUT_SHAPE)
+        self.y = K.placeholder(name='y', dtype='float32', shape=(1, OUTPUT_DIM))
         if self.use_mask:
-            self.m = K.placeholder(dtype='float32', shape=INPUT_SHAPE)
+            self.m = K.placeholder(name='m', dtype='float32', shape=INPUT_SHAPE)
 
         # If change of variable is specified
         if var_change:
@@ -114,39 +134,75 @@ class OptYolo:
             self.d = x_full - self.x
             if self.use_mask:
                 self.d = tf.multiply(self.d, self.m)
-            self.x_in = self.x + self.d
+            self.x_d = self.x + self.d
             self.var_list = [self.w]
         else:
             # Optimize directly on d (perturbation)
             self.d = tf.Variable(initial_value=init_val, trainable=True,
                                  dtype=tf.float32)
             if self.use_mask:
-                self.d = tf.multiply(self.d, self.m)
-            self.x_in = self.x + self.d
+                dm = tf.multiply(self.d, self.m)
+                self.x_in = self.x + dm
+            else:
+                self.x_in = self.x + self.d
+            # Require clipping
+            self.x_d = tf.clip_by_value(self.x_in, 0, 1)
             self.var_list = [self.d]
 
-        # model_output here is box_class_pred
-        _, _, _, model_output = yolo_head(self.model.output, anchors, 80)
+        # Get x_in by transforming x_d by given transformation matrices
+        self.M = K.placeholder(name='M', dtype='float32', shape=(self.batch_size, 8))
+        x_repeat = tf.tile(self.x_d, [self.batch_size, 1, 1, 1])
+        self.x_tran = tf.contrib.image.transform(x_repeat, self.M,
+                                                 interpolation='BILINEAR')
+
+        # Randomly adjust brightness
+        b = np.multiply((2 * np.random.rand(batch_size, 1) - 1) * DELTA_BRI,
+                        np.ones(shape=(batch_size, N_FEATURE)))
+        b = b.reshape((batch_size,) + IMG_SHAPE)
+        delta = tf.Variable(initial_value=b, trainable=False, dtype=tf.float32)
+        self.x_b = tf.clip_by_value(self.x_tran + delta, 0, 1)
+
+        # Upsample and downsample
+        def resize(x):
+            tmp = tf.image.resize_images(
+                x[0], x[1], method=tf.image.ResizeMethod.BILINEAR)
+            return tf.image.resize_images(
+                tmp, [HEIGHT, WIDTH], method=tf.image.ResizeMethod.BILINEAR)
+
+        # Set upsampling size to be 600x600 if not specified
+        if sp_size is None:
+            sp_size = np.zeros((batch_size, 2)) + 600
+        up_size = tf.constant(sp_size, dtype=tf.int32)
+        # Use map_fn to do random resampling for each image
+        self.x_rs = tf.map_fn(resize, (self.x_b, up_size), dtype=tf.float32)
+
+        self.x_in = self.x_rs
+        model_output = self.model(self.x_in)
+        self.model_output = model_output
 
         if loss_op == 0:
             # Carlini l2-attack's loss
             # Get 2 largest outputs
-            output_2max = tf.nn.top_k(model_output, 2)[0][0]
+            output_2max = tf.nn.top_k(model_output, 2)[0]
             # Find z_i = max(Z[i != y])
-            i_y = tf.argmax(self.y, axis=1, output_type=tf.int32)[0]
-            i_max = tf.to_int32(tf.argmax(model_output, axis=1)[0])
-            z_i = tf.cond(tf.equal(i_y, i_max),
-                          lambda: output_2max[1], lambda: output_2max[0])
+            i_y = tf.argmax(self.y, axis=1, output_type=tf.int32)
+            i_max = tf.to_int32(tf.argmax(model_output, axis=1))
+            z_i = tf.where(tf.equal(i_y, i_max), output_2max[:, 1],
+                           output_2max[:, 0])
             if self.target:
                 # loss = max(max(Z[i != t]) - Z[t], -K)
-                self.loss = tf.maximum(z_i - model_output[0, i_y], -self.k)
+                loss = tf.maximum(z_i - model_output[:, i_y[0]], -self.k)
             else:
                 # loss = max(Z[y] - max(Z[i != y]), -K)
-                self.loss = tf.maximum(model_output[0, i_y] - z_i, -self.k)
+                loss = tf.maximum(model_output[:, i_y[0]] - z_i, -self.k)
+            # Average across batch
+            self.loss = tf.reduce_sum(loss) / self.batch_size
         elif loss_op == 1:
             # Cross entropy loss, loss = -log(F(x_t))
-            self.loss = K.categorical_crossentropy(
-                self.y, model_output, from_logits=False)[0]
+            loss_all = K.categorical_crossentropy(
+                self.y, model_output, from_logits=True)
+            self.loss = tf.reduce_sum(loss_all)
+            self.loss /= self.batch_size
             if not self.target:
                 # loss = log(F(x_y))
                 self.loss *= -1
@@ -154,15 +210,54 @@ class OptYolo:
             raise ValueError("Invalid loss_op")
 
         # Regularization term with l2-norm
-        self.norm = tf.norm(self.d, ord='euclidean')
-
-        # Call a helper function to finalize and set up optimizer
+        if p_norm == "2":
+            norm = tf.norm(self.d, ord='euclidean')
+        elif p_norm == "1":
+            #norm = tf.norm(self.d, ord=1)
+            norm = tf.reduce_sum(tf.maximum(tf.abs(self.d) - THRES, 0))
+        elif p_norm == "inf":
+            norm = tf.norm(self.d, ord=np.inf)
+        else:
+            raise ValueError("Invalid norm_op")
+        # Encourage norm to be larger than some value
+        self.norm = tf.maximum(norm, l)
         self._setup_opt()
+
+    def _get_rand_transform_matrix(self, image_size, d, batch_size):
+
+        M = np.zeros((batch_size, 8))
+
+        for i in range(batch_size):
+            tl_top = random.uniform(-d, d)     # Top left corner, top
+            tl_left = random.uniform(-d, d)    # Top left corner, left
+            bl_bottom = random.uniform(-d, d)  # Bot left corner, bot
+            bl_left = random.uniform(-d, d)    # Bot left corner, left
+            tr_top = random.uniform(-d, d)     # Top right corner, top
+            tr_right = random.uniform(-d, d)   # Top right corner, right
+            br_bottom = random.uniform(-d, d)  # Bot right corner, bot
+            br_right = random.uniform(-d, d)   # Bot right corner, right
+
+            transform = ProjectiveTransform()
+            transform.estimate(np.array((
+                (tl_left, tl_top),
+                (bl_left, image_size - bl_bottom),
+                (image_size - br_right, image_size - br_bottom),
+                (image_size - tr_right, tr_top)
+            )), np.array((
+                (0, 0),
+                (0, image_size),
+                (image_size, image_size),
+                (image_size, 0)
+            )))
+
+            M[i] = transform.params.flatten()[:8]
+
+        return M
 
     def optimize(self, x, y, n_step=1000, prog=True, mask=None):
         """
-        Run optimization attack, produce adversarial example from a single
-        sample, x.
+        Run optimization attack, produce adversarial example from a batch of
+        images transformed from a single sample, x.
 
         Parameters
         ----------
@@ -186,24 +281,39 @@ class OptYolo:
 
         with tf.Session() as sess:
 
-            # Initialize variables and load weights
-            sess.run(tf.global_variables_initializer())
-            self.model.load_weights(WEIGTHS_PATH)
-
-            # Ensure that shape is correct
+            # Create inputs to optimization
             x_ = np.copy(x).reshape(INPUT_SHAPE)
-            y_ = np.copy(y).reshape((1, 19, 19, 5, 80))
+            y_ = np.copy(y).reshape((1, OUTPUT_DIM))
+
+            # Generate a batch of transformed images
+            M_ = self._get_rand_transform_matrix(
+                WIDTH, np.floor(WIDTH * INT_TRN), self.batch_size)
 
             # Include mask in feed_dict if mask is used
             if self.use_mask:
+                # Repeat mask for all channels
                 m_ = np.repeat(
                     mask[np.newaxis, :, :, np.newaxis], N_CHANNEL, axis=3)
-                feed_dict = {self.x: x_, self.y: y_,
-                             self.m: m_, K.learning_phase(): False}
+                feed_dict = {self.x: x_, self.y: y_, self.M: M_, self.m: m_,
+                             K.learning_phase(): False}
             else:
-                feed_dict = {self.x: x_, self.y: y_, K.learning_phase(): False}
+                feed_dict = {self.x: x_, self.y: y_, self.M: M_,
+                             K.learning_phase(): False}
 
-            # Set up some variables for early stopping for loss_op = 0
+            # Initialize variables and load weights
+            sess.run(tf.global_variables_initializer())
+            self.model.load_weights(WEIGTHS_PATH)
+            if self.var_change:
+                # Initialize w here to be within L1-ball center at rctanh(2x-1)
+                init_rand = np.random.uniform(
+                    -self.init_scl, self.init_scl, size=INPUT_SHAPE)
+                # Clip values to remove numerical error atanh(1) or atanh(-1)
+                tanhw = np.clip(x_ * 2 - 1, -1 + EPS, 1 - EPS)
+                init_w = np.arctanh(tanhw) + init_rand
+                self.w.load(init_w)
+                #self.w.load(init_rand)
+
+            # Set up some variables for early stopping
             min_norm = float("inf")
             min_d = None
             earlystop_count = 0
@@ -220,7 +330,7 @@ class OptYolo:
                     norm = sess.run(self.norm, feed_dict=feed_dict)
                     loss = sess.run(self.loss, feed_dict=feed_dict)
                     # Save working adversarial example with smallest norm
-                    if loss == -self.k:
+                    if loss < -0.95 * self.k:
                         if norm < min_norm:
                             min_norm = norm
                             min_d = sess.run(self.d, feed_dict=feed_dict)
@@ -240,6 +350,7 @@ class OptYolo:
                     loss = sess.run(self.loss, feed_dict=feed_dict)
                     print("Step: {}, norm={:.3f}, loss={:.3f}, obj={:.3f}".format(
                         step, norm, loss, f))
+                    # print(sess.run(self.model_output, feed_dict=feed_dict)[0])
 
             if min_d is not None:
                 x_adv = (x_ + min_d).reshape(IMG_SHAPE)
@@ -253,8 +364,9 @@ class OptYolo:
     def optimize_search(self, x, y, n_step=1000, search_step=10, prog=True,
                         mask=None):
         """
-        Run optimization attack, produce adversarial example from a single
-        sample, x. Does binary search on log_10(c) to find optimal value of c.
+        Run optimization attack, produce adversarial example from a batch of
+        images transformed from a single sample, x. Does binary search on
+        log_10(c) to find optimal value of c.
 
         Parameters
         ----------
@@ -285,7 +397,7 @@ class OptYolo:
         cp_hi = MAX_CP
 
         x_adv_suc = None
-        norm_suc = None
+        norm_suc = float("inf")
         start_time = time.time()
 
         # Binary search on cp
@@ -307,22 +419,26 @@ class OptYolo:
                 if score > SCORE_THRES:
                     # Attack succeeded, decrease cp to lower norm
                     cp_hi = cp
-                    x_adv_suc = np.copy(x_adv)
-                    norm_suc = norm
+                    # Only save adv example if norm becomes smaller
+                    if norm < norm_suc:
+                        x_adv_suc = np.copy(x_adv)
+                        norm_suc = norm
                 else:
                     # Attack failed, increase cp for stronger attack
                     cp_lo = cp
             else:
                 if score > 1 - SCORE_THRES:
-                    # Attack failed
+                    # Attack failed, increase cp for stronger attack
                     cp_lo = cp
                 else:
-                    # Attack succeeded
+                    # Attack succeeded, decrease cp to lower norm
                     cp_hi = cp
-                    x_adv_suc = np.copy(x_adv)
-                    norm_suc = norm
+                    # Only save adv example if norm becomes smaller
+                    if norm < norm_suc:
+                        x_adv_suc = np.copy(x_adv)
+                        norm_suc = norm
             if prog:
-                print("c_Step: {}, c={:.4f}, score={:.3f}".format(
-                    c_step, self.c, score))
+                print("c_Step: {}, c={:.4f}, score={:.3f}, norm={:.3f}".format(
+                    c_step, self.c, score, norm))
         print("Finished in {:.2f}s".format(time.time() - start_time))
         return x_adv_suc, norm_suc
