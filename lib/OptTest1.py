@@ -11,7 +11,7 @@ MAX_CP = 2.   # Maximum power index of c
 SCORE_THRES = 0.99  # Softmax score threshold to consider success of attacks
 PROG_PRINT_STEPS = 200  # Print progress every certain steps
 EARLYSTOP_STEPS = 1000  # Early stopping if no improvement for certain steps
-INT_TRN = 0  # Intensity of randomness (for transform)
+INT_TRN = 0.07  # Intensity of randomness (for transform)
 
 DELTA_BRI = 0.15
 THRES = 0.05
@@ -29,7 +29,7 @@ class OptTest1:
         """Used to setup optimization when c is updated"""
 
         # obj_func = c * loss + l2-norm(d)
-        self.f = self.c * self.loss + self.norm
+        self.f = self.c * self.loss + self.c_smooth * self.smooth + self.norm
         # Setup optimizer
         if self.use_bound:
             # Use Scipy optimizer with upper and lower bound [0, 1]
@@ -57,9 +57,9 @@ class OptTest1:
                 self.f, var_list=self.var_list, global_step=global_step)
 
     def __init__(self, model, target=True, c=1, lr=0.01, init_scl=0.1,
-                 use_bound=False, loss_op=0, k=5, var_change=True, p_norm="2",
-                 l=0, use_mask=True, decay=True, batch_size=BATCH_SIZE, 
-                 sp_size=None):
+                 use_bound=False, loss_op=0, k=5, var_change=True, p_norm="1",
+                 l=0, use_mask=True, decay=True, batch_size=BATCH_SIZE,
+                 sp_size=None, rnd_tran=INT_TRN, rnd_bri=DELTA_BRI, c_smooth=10):
         """
         Initialize the optimizer. Default values of the parameters are
         recommended and decided specifically for attacking traffic sign
@@ -116,14 +116,18 @@ class OptTest1:
         self.batch_size = batch_size
         self.var_change = var_change
         self.init_scl = init_scl
+        self.rnd_tran = rnd_tran
+        self.c_smooth = c_smooth
 
         # Initialize variables
         init_val = tf.random_uniform(INPUT_SHAPE, minval=-init_scl,
                                      maxval=init_scl, dtype=tf.float32)
         self.x = K.placeholder(name='x', dtype='float32', shape=INPUT_SHAPE)
-        self.y = K.placeholder(name='y', dtype='float32', shape=(1, OUTPUT_DIM))
+        self.y = K.placeholder(name='y', dtype='float32',
+                               shape=(1, OUTPUT_DIM))
         if self.use_mask:
-            self.m = K.placeholder(name='m', dtype='float32', shape=INPUT_SHAPE)
+            self.m = K.placeholder(
+                name='m', dtype='float32', shape=INPUT_SHAPE)
 
         # If change of variable is specified
         if var_change:
@@ -150,13 +154,14 @@ class OptTest1:
             self.var_list = [self.d]
 
         # Get x_in by transforming x_d by given transformation matrices
-        self.M = K.placeholder(name='M', dtype='float32', shape=(self.batch_size, 8))
+        self.M = K.placeholder(name='M', dtype='float32',
+                               shape=(self.batch_size, 8))
         x_repeat = tf.tile(self.x_d, [self.batch_size, 1, 1, 1])
         self.x_tran = tf.contrib.image.transform(x_repeat, self.M,
                                                  interpolation='BILINEAR')
 
         # Randomly adjust brightness
-        b = np.multiply((2 * np.random.rand(batch_size, 1) - 1) * DELTA_BRI,
+        b = np.multiply((2 * np.random.rand(batch_size, 1) - 1) * rnd_bri,
                         np.ones(shape=(batch_size, N_FEATURE)))
         b = b.reshape((batch_size,) + IMG_SHAPE)
         delta = tf.Variable(initial_value=b, trainable=False, dtype=tf.float32)
@@ -219,6 +224,15 @@ class OptTest1:
             norm = tf.norm(self.d, ord=np.inf)
         else:
             raise ValueError("Invalid norm_op")
+
+        d_x = tf.concat([self.d[:, WIDTH - 1:, :],
+                         self.d[:, :WIDTH - 1, :]], axis=1)
+        d_y = tf.concat([self.d[HEIGHT - 1:, :, :],
+                         self.d[:HEIGHT - 1, :, :]], axis=0)
+        smooth_x = tf.reduce_sum(tf.square(self.d - d_x))
+        smooth_y = tf.reduce_sum(tf.square(self.d - d_y))
+        self.smooth = smooth_x + smooth_y
+
         # Encourage norm to be larger than some value
         self.norm = tf.maximum(norm, l)
         self._setup_opt()
@@ -287,7 +301,7 @@ class OptTest1:
 
             # Generate a batch of transformed images
             M_ = self._get_rand_transform_matrix(
-                WIDTH, np.floor(WIDTH * INT_TRN), self.batch_size)
+                WIDTH, np.floor(WIDTH * self.rnd_tran), self.batch_size)
 
             # Include mask in feed_dict if mask is used
             if self.use_mask:
@@ -311,7 +325,7 @@ class OptTest1:
                 tanhw = np.clip(x_ * 2 - 1, -1 + EPS, 1 - EPS)
                 init_w = np.arctanh(tanhw) + init_rand
                 self.w.load(init_w)
-                #self.w.load(init_rand)
+                # self.w.load(init_rand)
 
             # Set up some variables for early stopping
             min_norm = float("inf")
@@ -324,6 +338,7 @@ class OptTest1:
                     self.optimizer.minimize(sess, feed_dict=feed_dict)
                 else:
                     sess.run(self.opt, feed_dict=feed_dict)
+                    #return sess.run(self.d_x, feed_dict=feed_dict)
 
                 # Keep track of "best" solution
                 if self.loss_op == 0:
@@ -348,8 +363,9 @@ class OptTest1:
                     f = sess.run(self.f, feed_dict=feed_dict)
                     norm = sess.run(self.norm, feed_dict=feed_dict)
                     loss = sess.run(self.loss, feed_dict=feed_dict)
-                    print("Step: {}, norm={:.3f}, loss={:.3f}, obj={:.3f}".format(
-                        step, norm, loss, f))
+                    smooth = sess.run(self.smooth, feed_dict=feed_dict)
+                    print("Step: {}, norm={:.3f}, loss={:.3f}, smooth={:.3f}, obj={:.3f}".format(
+                        step, norm, loss, smooth, f))
                     # print(sess.run(self.model_output, feed_dict=feed_dict)[0])
 
             if min_d is not None:
@@ -442,3 +458,5 @@ class OptTest1:
                     c_step, self.c, score, norm))
         print("Finished in {:.2f}s".format(time.time() - start_time))
         return x_adv_suc, norm_suc
+
+

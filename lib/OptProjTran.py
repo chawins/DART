@@ -29,7 +29,7 @@ class OptProjTran:
         """Used to setup optimization when c is updated"""
 
         # obj_func = c * loss + l2-norm(d)
-        self.f = self.c * self.loss + self.norm
+        self.f = self.c * self.loss #+ self.c_smooth * self.smooth + self.norm
         # Setup optimizer
         if self.use_bound:
             # Use Scipy optimizer with upper and lower bound [0, 1]
@@ -59,7 +59,7 @@ class OptProjTran:
     def __init__(self, model, target=True, c=1, lr=0.01, init_scl=0.1,
                  use_bound=False, loss_op=0, k=5, var_change=True, p_norm="1",
                  l=0, use_mask=True, decay=True, batch_size=BATCH_SIZE,
-                 sp_size=None, rnd_tran=INT_TRN, rnd_bri=DELTA_BRI):
+                 sp_size=None, rnd_tran=INT_TRN, rnd_bri=DELTA_BRI, c_smooth=0):
         """
         Initialize the optimizer. Default values of the parameters are
         recommended and decided specifically for attacking traffic sign
@@ -117,6 +117,7 @@ class OptProjTran:
         self.var_change = var_change
         self.init_scl = init_scl
         self.rnd_tran = rnd_tran
+        self.c_smooth = c_smooth
 
         # Initialize variables
         init_val = tf.random_uniform(INPUT_SHAPE, minval=-init_scl,
@@ -141,16 +142,16 @@ class OptProjTran:
             self.var_list = [self.w]
         else:
             # Optimize directly on d (perturbation)
-            self.d = tf.Variable(initial_value=init_val, trainable=True,
-                                 dtype=tf.float32)
+            d = tf.Variable(initial_value=init_val, trainable=True, 
+                            dtype=tf.float32)
             if self.use_mask:
-                dm = tf.multiply(self.d, self.m)
-                self.x_in = self.x + dm
+                self.d = tf.multiply(d, self.m)
             else:
-                self.x_in = self.x + self.d
+                self.d = d
+            self.x_in = self.x + self.d
             # Require clipping
             self.x_d = tf.clip_by_value(self.x_in, 0, 1)
-            self.var_list = [self.d]
+            self.var_list = [d]
 
         # Get x_in by transforming x_d by given transformation matrices
         self.M = K.placeholder(name='M', dtype='float32',
@@ -180,8 +181,7 @@ class OptProjTran:
         # Use map_fn to do random resampling for each image
         self.x_rs = tf.map_fn(resize, (self.x_b, up_size), dtype=tf.float32)
 
-        self.x_in = self.x_rs
-        model_output = self.model(self.x_in)
+        model_output = self.model(self.x_rs)
         self.model_output = model_output
 
         if loss_op == 0:
@@ -213,7 +213,7 @@ class OptProjTran:
         else:
             raise ValueError("Invalid loss_op")
 
-        # Regularization term with l2-norm
+        # Regularize perturbation with specified norm
         if p_norm == "2":
             norm = tf.norm(self.d, ord='euclidean')
         elif p_norm == "1":
@@ -223,6 +223,15 @@ class OptProjTran:
             norm = tf.norm(self.d, ord=np.inf)
         else:
             raise ValueError("Invalid norm_op")
+
+        d_x = tf.concat([self.d[:, WIDTH - 1:, :],
+                         self.d[:, :WIDTH - 1, :]], axis=1)
+        d_y = tf.concat([self.d[HEIGHT - 1:, :, :],
+                         self.d[:HEIGHT - 1, :, :]], axis=0)
+        smooth_x = tf.reduce_sum(tf.square(self.d - d_x))
+        smooth_y = tf.reduce_sum(tf.square(self.d - d_y))
+        self.smooth = smooth_x + smooth_y
+
         # Encourage norm to be larger than some value
         self.norm = tf.maximum(norm, l)
         self._setup_opt()
@@ -328,6 +337,7 @@ class OptProjTran:
                     self.optimizer.minimize(sess, feed_dict=feed_dict)
                 else:
                     sess.run(self.opt, feed_dict=feed_dict)
+                    # return sess.run(self.d_x, feed_dict=feed_dict)
 
                 # Keep track of "best" solution
                 if self.loss_op == 0:
@@ -352,8 +362,9 @@ class OptProjTran:
                     f = sess.run(self.f, feed_dict=feed_dict)
                     norm = sess.run(self.norm, feed_dict=feed_dict)
                     loss = sess.run(self.loss, feed_dict=feed_dict)
-                    print("Step: {}, norm={:.3f}, loss={:.3f}, obj={:.3f}".format(
-                        step, norm, loss, f))
+                    smooth = sess.run(self.smooth, feed_dict=feed_dict)
+                    print("Step: {}, norm={:.3f}, loss={:.3f}, smooth={:.3f}, obj={:.3f}".format(
+                        step, norm, loss, smooth, f))
                     # print(sess.run(self.model_output, feed_dict=feed_dict)[0])
 
             if min_d is not None:

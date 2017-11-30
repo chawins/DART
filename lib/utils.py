@@ -13,9 +13,12 @@ MASK_THRES_MAX = 0.9
 
 def rgb2gray(image):
     """Convert 3-channel RGB image into grayscale"""
-    return (0.299 * image[:, :, 0] + 0.587 * image[:, :, 1] +
-            0.114 * image[:, :, 2])
-
+    if image.ndim == 3:
+        return (0.299 * image[:, :, 0] + 0.587 * image[:, :, 1] +
+                0.114 * image[:, :, 2])
+    elif image.ndim == 4:
+        return (0.299 * image[:, :, :, 0] + 0.587 * image[:, :, :, 1] +
+                0.114 * image[:, :, :, 2])
 
 def read_image(im_name):
     """Read a single image into numpy array"""
@@ -84,9 +87,8 @@ def check_mask(mask):
 def load_samples(img_dir, label_path):
     """Load sample images, resize and find masks"""
 
-    # Load images and labels
+    # Load images
     images = read_images(img_dir)
-    labels = read_labels(label_path)
 
     ex_ind = []
     masks_full = []
@@ -105,15 +107,18 @@ def load_samples(img_dir, label_path):
 
     # Exclude images that don't produce valid mask
     x_ben_full = np.delete(images, ex_ind, axis=0)
-    y_ben = np.delete(labels, ex_ind, axis=0)
 
     # Resize images
     x_ben = resize_all(x_ben_full, interp='bilinear')
 
-    # One-hot encode labels
-    y_ben = keras.utils.to_categorical(y_ben, NUM_LABELS)
-
-    return x_ben, x_ben_full, y_ben, masks, masks_full
+    if label_path is not None:
+        labels = read_labels(label_path)
+        y_ben = np.delete(labels, ex_ind, axis=0)
+        # One-hot encode labels
+        y_ben = keras.utils.to_categorical(y_ben, NUM_LABELS)
+        return x_ben, x_ben_full, y_ben, masks, masks_full
+    else:
+        return x_ben, x_ben_full, masks, masks_full
 
 
 def softmax(x):
@@ -714,3 +719,89 @@ def s_pgd(model, x, y, norm="2", n_step=40, step_size=0.01, target=True,
             start_time = time.time()
 
     return x_adv
+
+
+def random_brightness(x, delta=0.15):
+
+    if x.ndim == 3:
+        b = np.zeros(x.shape) + np.random.uniform(-delta, delta)
+        return np.clip(x + b, 0, 1)
+    elif x.ndim == 4:
+        x_out = np.zeros_like(x)
+        for i, x_cur in enumerate(x):
+            b = np.zeros(x.shape) + np.random.uniform(-delta, delta)
+            x_out[i] = np.clip(x_cur + b, 0, 1)
+        return x_out
+
+
+def random_resize(x):
+
+    if x.ndim == 3:
+        size = np.random.randint(20, 600)
+        tmp = misc.imresize(x, (size, size), interp="bilinear")
+        return misc.imresize(tmp, (HEIGHT, WIDTH), interp="bilinear")
+    elif x.ndim == 4:
+        x_out = np.zeros_like(x)
+        for i, x_cur in enumerate(x):
+            size = np.random.randint(20, 600)
+            tmp = misc.imresize(x_cur, (size, size), interp="bilinear")
+            x_out[i] = misc.imresize(tmp, (HEIGHT, WIDTH), interp="bilinear")
+        return x_out
+
+
+# def eval_tran(model, x_adv, y_tg, y_smp):
+
+#     rnd_transform = RandomTransform(p=1.0, intensity=0.3)
+#     suc_rate = []
+
+#     for i, x_s in enumerate(x_adv):
+#         j = 0
+#         n_suc = 0
+#         n_total = 0
+#         for _, x in enumerate(x_s):
+#             if np.argmax(y_smp[i]) == np.argmax(y_tg[j]):
+#                 j += 1
+#             for _ in range(20):
+#                 tmp = rnd_transform.transform(x)
+#                 tmp = random_brightness(tmp, delta=0.3)
+#                 tmp = random_resize(tmp)
+#                 y_pred = int(predict(model, tmp))
+#                 if y_pred == np.argmax(y_tg[j]):
+#                     n_suc += 1
+#                 n_total += 1
+#             j += 1
+#         suc_rate.append(float(n_suc) / n_total)
+#     return suc_rate
+
+def eval_tran(model, x_adv, x_smp, x_smp_full, y_tg, y_smp=None):
+
+    rnd_transform = RandomTransform(p=1.0, intensity=0.3)
+    suc_rate = []
+
+    for i, x_s in enumerate(x_adv):
+        j = 0
+        n_suc = 0
+        n_total = 0
+        for _, x in enumerate(x_s):
+            if y_smp is not None:
+                if np.argmax(y_smp[i]) == np.argmax(y_tg[j]):
+                    j += 1
+
+            ptb = x - x_smp[i]
+            ptb = cv2.resize(ptb, (x_smp_full[i].shape[1],
+                                   x_smp_full[i].shape[0]),
+                             interpolation=cv2.INTER_LINEAR)
+            out_full = x_smp_full[i] + ptb
+            out_full = np.clip(out_full, 0, 1)
+
+            for _ in range(10):
+                tmp = rnd_transform.transform(out_full)
+                tmp = random_brightness(tmp, delta=0.3)
+                tmp = random_resize(tmp)
+                y_pred = int(predict(model, tmp))
+                if y_pred == np.argmax(y_tg[j]):
+                    n_suc += 1
+                n_total += 1
+            j += 1
+        suc_rate.append(float(n_suc) / n_total)
+    return suc_rate
