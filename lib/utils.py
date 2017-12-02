@@ -20,6 +20,7 @@ def rgb2gray(image):
         return (0.299 * image[:, :, :, 0] + 0.587 * image[:, :, :, 1] +
                 0.114 * image[:, :, :, 2])
 
+
 def read_image(im_name):
     """Read a single image into numpy array"""
     return misc.imread(im_name, flatten=False, mode='RGB')

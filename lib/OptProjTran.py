@@ -29,7 +29,7 @@ class OptProjTran:
         """Used to setup optimization when c is updated"""
 
         # obj_func = c * loss + l2-norm(d)
-        self.f = self.c * self.loss #+ self.c_smooth * self.smooth + self.norm
+        self.f = self.c * self.loss + self.c_smooth * self.smooth + self.norm
         # Setup optimizer
         if self.use_bound:
             # Use Scipy optimizer with upper and lower bound [0, 1]
@@ -142,7 +142,7 @@ class OptProjTran:
             self.var_list = [self.w]
         else:
             # Optimize directly on d (perturbation)
-            d = tf.Variable(initial_value=init_val, trainable=True, 
+            d = tf.Variable(initial_value=init_val, trainable=True,
                             dtype=tf.float32)
             if self.use_mask:
                 self.d = tf.multiply(d, self.m)
