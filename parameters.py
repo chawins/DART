@@ -21,8 +21,8 @@ from tensorflow.contrib.opt import ScipyOptimizerInterface
 # Set constants
 NUM_LABELS = 43                             # Number of labels
 BATCH_SIZE = 32                             # Size of batch
-HEIGHT = 32
-WIDTH = 32
+HEIGHT = 32                                 # Height of input image
+WIDTH = 32                                  # Width of input image
 N_CHANNEL = 3                               # Number of channels
 OUTPUT_DIM = 43                             # Number of output dimension
 NUM_EPOCH = 100                             # Number of epoch to train

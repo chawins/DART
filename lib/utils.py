@@ -255,7 +255,7 @@ def eval_adv(model, x_adv, y, target=True):
     ----------
     model  : Keras model
              Target model
-    x_adv  : np.array, shape=(n_mag, n_sample, height, width, n_channel) or 
+    x_adv  : np.array, shape=(n_mag, n_sample, height, width, n_channel) or
              shape=(n_sample, height, width, n_channel)
              Adversarial examples to evaluate
     y      : np.array, shape=(n_sample, NUM_LABELS)
@@ -750,31 +750,31 @@ def random_resize(x):
         return x_out
 
 
-# def eval_tran(model, x_adv, y_tg, y_smp):
-
-#     rnd_transform = RandomTransform(p=1.0, intensity=0.3)
-#     suc_rate = []
-
-#     for i, x_s in enumerate(x_adv):
-#         j = 0
-#         n_suc = 0
-#         n_total = 0
-#         for _, x in enumerate(x_s):
-#             if np.argmax(y_smp[i]) == np.argmax(y_tg[j]):
-#                 j += 1
-#             for _ in range(20):
-#                 tmp = rnd_transform.transform(x)
-#                 tmp = random_brightness(tmp, delta=0.3)
-#                 tmp = random_resize(tmp)
-#                 y_pred = int(predict(model, tmp))
-#                 if y_pred == np.argmax(y_tg[j]):
-#                     n_suc += 1
-#                 n_total += 1
-#             j += 1
-#         suc_rate.append(float(n_suc) / n_total)
-#     return suc_rate
-
 def eval_tran(model, x_adv, x_smp, x_smp_full, y_tg, y_smp=None):
+    """
+    Evaluate targeted adversarial examples under randomized transformations,
+    return attack success rate for each of the original samples.
+    * Use for specific format of x_adv in physical experiments. For more
+      general evaluation method, plese see evaluate_adv()
+
+    Parameters
+    ----------
+    x_adv : np.array, shape=(n_sample, n_target, IMG_SHAPE)
+            Each entry of <x_adv> is a list of adversarial examples generated
+            from one original image but into <n_target> different target classes
+            specified by <y_tg>; the set of original images is <x_smp>
+    x_smp : np.array, shape=(n_sample, IMG_SHAPE)
+    x_smp_full : np.array, shape=(n_sample, "original shape")
+                 Original images of <x_smp> before resizing
+    y_tg : np.array, shape=(n_target, NUM_LABELS)
+    y_smp : np.array, shape=(n_sample, NUM_LABELS)
+            Labels of <x_smp>
+
+    Return
+    ------
+    suc_rate : list, shape=(n_sample)
+               List of attack success rate from each original sample
+    """
 
     rnd_transform = RandomTransform(p=1.0, intensity=0.3)
     suc_rate = []
@@ -783,11 +783,14 @@ def eval_tran(model, x_adv, x_smp, x_smp_full, y_tg, y_smp=None):
         j = 0
         n_suc = 0
         n_total = 0
+
         for _, x in enumerate(x_s):
+            # Skip target label if it is the same as original label
             if y_smp is not None:
                 if np.argmax(y_smp[i]) == np.argmax(y_tg[j]):
                     j += 1
 
+            # Resize and add perturbation to image of original size
             ptb = x - x_smp[i]
             ptb = cv2.resize(ptb, (x_smp_full[i].shape[1],
                                    x_smp_full[i].shape[0]),
@@ -795,6 +798,7 @@ def eval_tran(model, x_adv, x_smp, x_smp_full, y_tg, y_smp=None):
             out_full = x_smp_full[i] + ptb
             out_full = np.clip(out_full, 0, 1)
 
+            # Randomly transform each sample 10 times
             for _ in range(10):
                 tmp = rnd_transform.transform(out_full)
                 tmp = random_brightness(tmp, delta=0.3)
@@ -806,3 +810,53 @@ def eval_tran(model, x_adv, x_smp, x_smp_full, y_tg, y_smp=None):
             j += 1
         suc_rate.append(float(n_suc) / n_total)
     return suc_rate
+
+
+def evaluate_adv(model, x_adv, y, target=True, x_smp=None, x_smp_full=None, 
+                 tran=True):
+    """
+    Evaluate adversarial examples with or without random transformation
+    """
+
+    t = 10
+    rnd_transform = RandomTransform(p=1.0, intensity=0.3)
+    n_suc = 0
+
+    for i, x in enumerate(x_adv):
+        if x_smp is not None:
+            # Resize and add perturbation to image of original size
+            ptb = x - x_smp[i]
+            ptb = cv2.resize(ptb, (x_smp_full[i].shape[1],
+                                   x_smp_full[i].shape[0]),
+                             interpolation=cv2.INTER_LINEAR)
+            out_full = x_smp_full[i] + ptb
+            out_full = np.clip(out_full, 0, 1)
+        else:
+            out_full = x
+
+        if tran:
+            # Randomly transform each sample 10 times
+            for _ in range(t):
+                tmp = rnd_transform.transform(out_full)
+                tmp = random_brightness(tmp, delta=0.3)
+                tmp = random_resize(tmp)
+                y_pred = int(predict(model, tmp))
+                if target and y_pred == np.argmax(y[i]):
+                    n_suc += 1
+                elif not target and y_pred != np.argmax(y[i]):
+                    n_suc += 1
+        else:
+            if x_smp is not None:
+                tmp = misc.imresize(out_full, (HEIGHT, WIDTH),
+                                    interp="bilinear")
+            else:
+                tmp = out_full
+            y_pred = int(predict(model, tmp))
+            if target and y_pred == np.argmax(y[i]):
+                n_suc += 1
+            elif not target and y_pred != np.argmax(y[i]):
+                n_suc += 1
+    if tran:
+        return float(n_suc) / (len(x_adv) * t)
+    else:
+        return float(n_suc) / len(x_adv)

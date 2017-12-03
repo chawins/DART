@@ -1,3 +1,7 @@
+import os
+os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+os.environ["CUDA_VISIBLE_DEVICES"] = "6"
+
 from lib.keras_utils import *
 from lib.OptCarlini import *
 from lib.OptTransform import *
@@ -6,12 +10,12 @@ from lib.utils import *
 from parameters import *
 
 # Set training metadata
-LOAD_WEIGHTS = True
-LOAD_WEIGHTS_PATH = './weights3/weights.40-0.24.hdf5'
-TRAIN_FILE_NAME = 'train_balanced_75.p'
+LOAD_WEIGHTS = False
+LOAD_WEIGHTS_PATH = './weights.24-0.20.hdf5'
+TRAIN_FILE_NAME = 'train_extended_75.p'
 
 # Build model. model is a compiled Keras model with last layer being logits.
-model = built_mltscl()
+model = build_mltscl()
 if LOAD_WEIGHTS:
     model.load_weights(LOAD_WEIGHTS_PATH)
 
