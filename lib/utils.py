@@ -57,10 +57,10 @@ def read_labels(path):
     return content
 
 
-def resize(image, interp='bilinear'):
+def resize(image, size=IMAGE_SIZE, interp='bilinear'):
     """Resize to IMAGE_SIZE and rescale to [0, 1]"""
 
-    img = misc.imresize(image, IMAGE_SIZE, interp=interp)
+    img = misc.imresize(image, size, interp=interp)
     img = (img / 255.).astype(np.float32)
     return img
 
@@ -722,9 +722,9 @@ def s_pgd(model, x, y, norm="2", n_step=40, step_size=0.01, target=True,
     return x_adv
 
 
-def random_brightness(x, delta=0.15):
+def random_brightness(x, delta=0.15, repeat=False):
 
-    if x.ndim == 3:
+    if x.ndim == 3 or repeat:
         b = np.zeros(x.shape) + np.random.uniform(-delta, delta)
         return np.clip(x + b, 0, 1)
     elif x.ndim == 4:
@@ -735,96 +735,54 @@ def random_brightness(x, delta=0.15):
         return x_out
 
 
-def random_resize(x):
+def random_resize(x, repeat=False):
 
     if x.ndim == 3:
         size = np.random.randint(20, 600)
-        tmp = misc.imresize(x, (size, size), interp="bilinear")
-        return misc.imresize(tmp, (HEIGHT, WIDTH), interp="bilinear")
+        tmp = resize(x, size=(size, size))
+        return resize(tmp)
     elif x.ndim == 4:
-        x_out = np.zeros_like(x)
-        for i, x_cur in enumerate(x):
+        x_out = np.zeros((len(x),) + IMG_SHAPE)
+        if repeat:
             size = np.random.randint(20, 600)
-            tmp = misc.imresize(x_cur, (size, size), interp="bilinear")
-            x_out[i] = misc.imresize(tmp, (HEIGHT, WIDTH), interp="bilinear")
+            for i, x_cur in enumerate(x):
+                tmp = resize(x_cur, size=(size, size))
+                x_out[i] = resize(tmp)
+        else:
+            for i, x_cur in enumerate(x):
+                size = np.random.randint(20, 600)
+                tmp = resize(x_cur, size=(size, size))
+                x_out[i] = resize(tmp)
         return x_out
 
 
-def eval_tran(model, x_adv, x_smp, x_smp_full, y_tg, y_smp=None):
-    """
-    Evaluate targeted adversarial examples under randomized transformations,
-    return attack success rate for each of the original samples.
-    * Use for specific format of x_adv in physical experiments. For more
-      general evaluation method, plese see evaluate_adv()
-
-    Parameters
-    ----------
-    x_adv : np.array, shape=(n_sample, n_target, IMG_SHAPE)
-            Each entry of <x_adv> is a list of adversarial examples generated
-            from one original image but into <n_target> different target classes
-            specified by <y_tg>; the set of original images is <x_smp>
-    x_smp : np.array, shape=(n_sample, IMG_SHAPE)
-    x_smp_full : np.array, shape=(n_sample, "original shape")
-                 Original images of <x_smp> before resizing
-    y_tg : np.array, shape=(n_target, NUM_LABELS)
-    y_smp : np.array, shape=(n_sample, NUM_LABELS)
-            Labels of <x_smp>
-
-    Return
-    ------
-    suc_rate : list, shape=(n_sample)
-               List of attack success rate from each original sample
-    """
-
-    rnd_transform = RandomTransform(p=1.0, intensity=0.3)
-    suc_rate = []
-
-    for i, x_s in enumerate(x_adv):
-        j = 0
-        n_suc = 0
-        n_total = 0
-
-        for _, x in enumerate(x_s):
-            # Skip target label if it is the same as original label
-            if y_smp is not None:
-                if np.argmax(y_smp[i]) == np.argmax(y_tg[j]):
-                    j += 1
-
-            # Resize and add perturbation to image of original size
-            ptb = x - x_smp[i]
-            ptb = cv2.resize(ptb, (x_smp_full[i].shape[1],
-                                   x_smp_full[i].shape[0]),
-                             interpolation=cv2.INTER_LINEAR)
-            out_full = x_smp_full[i] + ptb
-            out_full = np.clip(out_full, 0, 1)
-
-            # Randomly transform each sample 10 times
-            for _ in range(10):
-                tmp = rnd_transform.transform(out_full)
-                tmp = random_brightness(tmp, delta=0.3)
-                tmp = random_resize(tmp)
-                y_pred = int(predict(model, tmp))
-                if y_pred == np.argmax(y_tg[j]):
-                    n_suc += 1
-                n_total += 1
-            j += 1
-        suc_rate.append(float(n_suc) / n_total)
-    return suc_rate
-
-
-def evaluate_adv(model, x_adv, y, target=True, x_smp=None, x_smp_full=None, 
-                 tran=True):
+def evaluate_adv(model, x_adv, y_t, x_smp, y_smp=None, target=True,
+                 x_smp_full=None, tran=True, sep=False):
     """
     Evaluate adversarial examples with or without random transformation
+
+    Returns
+    -------
+    suc_rate : float
+        Adversarial success rate
+    avg_conf_adv : float
+        Average confidence score of successful adversarial examples
+    avg_conf_orig : float
+        Average confidence score of original samples
     """
 
-    t = 10
+    w = 10
     rnd_transform = RandomTransform(p=1.0, intensity=0.3)
     n_suc = 0
+    n_total = 0
+    conf_orig = 0
+    conf_adv = 0
 
     for i, x in enumerate(x_adv):
-        if x_smp is not None:
-            # Resize and add perturbation to image of original size
+
+        if x_smp_full is not None:
+            # If full-sized original image is provided, resize and add
+            # perturbation to it before evaluating
             ptb = x - x_smp[i]
             ptb = cv2.resize(ptb, (x_smp_full[i].shape[1],
                                    x_smp_full[i].shape[0]),
@@ -835,28 +793,86 @@ def evaluate_adv(model, x_adv, y, target=True, x_smp=None, x_smp_full=None,
             out_full = x
 
         if tran:
-            # Randomly transform each sample 10 times
-            for _ in range(t):
-                tmp = rnd_transform.transform(out_full)
-                tmp = random_brightness(tmp, delta=0.3)
-                tmp = random_resize(tmp)
-                y_pred = int(predict(model, tmp))
-                if target and y_pred == np.argmax(y[i]):
-                    n_suc += 1
-                elif not target and y_pred != np.argmax(y[i]):
-                    n_suc += 1
+            # Randomly transform each sample w times
+            for _ in range(w):
+                # Transform adversarial examples
+                tmp_adv = rnd_transform.transform(out_full)
+                # Transform original examples
+                trn = rnd_transform.get_last_transform()
+                if x_smp_full is not None:
+                    tmp_orig = rnd_transform.apply_transform(
+                        x_smp_full[i], trn)
+                else:
+                    tmp_orig = rnd_transform.apply_transform(x_smp[i], trn)
+
+                tmp = np.array([tmp_adv, tmp_orig])
+                tmp = random_brightness(tmp, delta=0.3, repeat=True)
+                tmp = random_resize(tmp, repeat=True)
+
+                y_adv = int(predict(model, tmp[0]))
+                y_orig = int(predict(model, tmp[1]))
+
+                # Get confidence
+                c_adv = softmax(model.predict(tmp[0].reshape(INPUT_SHAPE))[0])
+                c_adv = np.max(c_adv)
+                c_orig = softmax(model.predict(tmp[1].reshape(INPUT_SHAPE))[0])
+
+                # Only count examples that are originally correctly classified
+                if y_smp is not None:
+                    if y_orig == np.argmax(y_smp[i]):
+                        n_total += 1
+                        conf_orig += np.max(c_orig)
+                        if target and y_adv == np.argmax(y_t[i]):
+                            n_suc += 1
+                            conf_adv += c_adv
+                        elif not target and y_adv != np.argmax(y_t[i]):
+                            n_suc += 1
+                            conf_adv += c_adv
+                else:
+                    n_total += 1
+                    conf_orig += np.max(c_orig)
+                    if target and y_adv == np.argmax(y_t[i]):
+                        n_suc += 1
+                        conf_adv += c_adv
+                    elif not target and y_adv != np.argmax(y_t[i]):
+                        n_suc += 1
+                        conf_adv += c_adv
         else:
-            if x_smp is not None:
-                tmp = misc.imresize(out_full, (HEIGHT, WIDTH),
-                                    interp="bilinear")
+            # Evaluate without transformation
+            if x_smp_full is not None:
+                tmp = resize(out_full)
             else:
                 tmp = out_full
-            y_pred = int(predict(model, tmp))
-            if target and y_pred == np.argmax(y[i]):
-                n_suc += 1
-            elif not target and y_pred != np.argmax(y[i]):
-                n_suc += 1
-    if tran:
-        return float(n_suc) / (len(x_adv) * t)
-    else:
-        return float(n_suc) / len(x_adv)
+
+            y_adv = int(predict(model, tmp))
+            y_orig = int(predict(model, x_smp[i]))
+
+            # Get confidence
+            c_adv = softmax(model.predict(tmp.reshape(INPUT_SHAPE))[0])
+            c_adv = np.max(c_adv)
+            c_orig = softmax(model.predict(x_smp[i].reshape(INPUT_SHAPE))[0])
+
+            if y_smp is not None:
+                if y_orig == np.argmax(y_smp[i]):
+                    n_total += 1
+                    conf_orig += np.max(c_orig)
+                    if target and y_adv == np.argmax(y_t[i]):
+                        n_suc += 1
+                        conf_adv += c_adv
+                    elif not target and y_adv != np.argmax(y_t[i]):
+                        n_suc += 1
+                        conf_adv += c_adv
+            else:
+                n_total += 1
+                conf_orig += np.max(c_orig)
+                if target and y_adv == np.argmax(y_t[i]):
+                    n_suc += 1
+                    conf_adv += c_adv
+                elif not target and y_adv != np.argmax(y_t[i]):
+                    n_suc += 1
+                    conf_adv += c_adv
+
+    suc_rate = float(n_suc) / n_total
+    avg_conf_adv = conf_adv / n_suc
+    avg_conf_orig = conf_orig / n_total
+    return suc_rate, avg_conf_adv, avg_conf_orig
