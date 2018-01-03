@@ -35,7 +35,7 @@ def read_images(path, resize=False, interp='bilinear'):
     """
 
     imgs = []
-    valid_images = [".jpg", ".gif", ".png", ".tga", ".jpeg"]
+    valid_images = [".jpg", ".gif", ".png", ".tga", ".jpeg", ".ppm"]
     for f in sorted(os.listdir(path)):
         ext = os.path.splitext(f)[1]
         if ext.lower() not in valid_images:

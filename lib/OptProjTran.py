@@ -149,7 +149,7 @@ class OptProjTran:
             else:
                 self.d = d
             self.x_in = self.x + self.d
-            # Require clipping
+            # Require clipping - projection to feasible region
             self.x_d = tf.clip_by_value(self.x_in, 0, 1)
             self.var_list = [d]
 

@@ -31,7 +31,8 @@ L2_LAMBDA = 0.0001                          # Lambda for l2 regularization
 
 # Set paths
 # Path to saved weights
-WEIGTHS_PATH = "./keras_weights/weights_mltscl_dataaug.hdf5"
+#WEIGTHS_PATH = "./keras_weights/weights_mltscl_dataaug.hdf5"
+WEIGTHS_PATH = "./keras_weights/weights_cnn_dataaug.hdf5"
 # Path to directory containing dataset
 DATA_DIR = "./input_data/"
 
