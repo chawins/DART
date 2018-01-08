@@ -31,12 +31,13 @@ L2_LAMBDA = 0.0001                          # Lambda for l2 regularization
 
 # Set paths
 # Path to saved weights
-#WEIGTHS_PATH = "./keras_weights/weights_mltscl_dataaug.hdf5"
-WEIGTHS_PATH = "./keras_weights/weights_cnn_dataaug.hdf5"
+WEIGTHS_PATH = "./keras_weights/weights_mltscl_dataaug.hdf5"
+#WEIGTHS_PATH = "./keras_weights/weights_cnn_dataaug.hdf5"
 # Path to directory containing dataset
 DATA_DIR = "./input_data/"
 
 INPUT_SHAPE = (1, HEIGHT, WIDTH, N_CHANNEL)  # Input shape of model
 IMG_SHAPE = (HEIGHT, WIDTH, N_CHANNEL)
-IMAGE_SIZE = (HEIGHT, WIDTH)                 # Height and width of resized image
+# Height and width of resized image
+IMAGE_SIZE = (HEIGHT, WIDTH)
 N_FEATURE = HEIGHT * WIDTH * N_CHANNEL       # Number of input dimension
