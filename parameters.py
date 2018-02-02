@@ -19,12 +19,18 @@ from scipy import misc
 from tensorflow.contrib.opt import ScipyOptimizerInterface
 
 # Set constants
-NUM_LABELS = 43                             # Number of labels
+NUM_LABELS = 10                              # Number of labels
 BATCH_SIZE = 32                             # Size of batch
-HEIGHT = 32                                 # Height of input image
-WIDTH = 32                                  # Width of input image
-N_CHANNEL = 3                               # Number of channels
-OUTPUT_DIM = 43                             # Number of output dimension
+HEIGHT = 28                                 # Height of input image
+WIDTH = 28                                  # Width of input image
+N_CHANNEL = 1                               # Number of channels
+OUTPUT_DIM = 10                              # Number of output dimension
+# NUM_LABELS = 43                             # Number of labels
+# BATCH_SIZE = 32                             # Size of batch
+# HEIGHT = 32                                 # Height of input image
+# WIDTH = 32                                  # Width of input image
+# N_CHANNEL = 3                               # Number of channels
+# OUTPUT_DIM = 43                             # Number of output dimension
 NUM_EPOCH = 100                             # Number of epoch to train
 LR = 0.0001                                 # Learning rate
 L2_LAMBDA = 0.0001                          # Lambda for l2 regularization
@@ -32,7 +38,7 @@ L2_LAMBDA = 0.0001                          # Lambda for l2 regularization
 # Set paths
 # Path to saved weights
 WEIGTHS_PATH = "./keras_weights/weights_mltscl_dataaug.hdf5"
-#WEIGTHS_PATH = "./keras_weights/weights_cnn_dataaug.hdf5"
+#WEIGTHS_PATH = "../Adversarial-Examples-GAN/test_cnn_mnist.h5"
 # Path to directory containing dataset
 DATA_DIR = "./input_data/"
 

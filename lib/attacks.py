@@ -338,13 +338,14 @@ def rnd_pgd(model, x, y, norm="2", n_step=40, step_size=0.01, target=True,
 
 
 def s_pgd(model, x, y, norm="2", n_step=40, step_size=0.01, target=True,
-          mask=None, beta=0.1, early_stop=True):
+          mask=None, beta=0.1, early_stop=True, grad_fn=None):
     """
     Projected gradient descent with added randomness during each step
     """
 
     x_adv = np.zeros_like(x)
-    grad_fn = gradient_fn(model)
+    if grad_fn is None:
+        grad_fn = gradient_fn(model)
     start_time = time.time()
 
     for i, x_in in enumerate(x):

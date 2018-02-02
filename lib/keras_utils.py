@@ -109,15 +109,24 @@ def build_cnn():
 #---------------------------------- Utility -----------------------------------#
 
 
-def gradient_fn(model):
+def gradient_model(model):
     """Return gradient function of model's loss w.r.t. input"""
 
-    x_in = K.placeholder(dtype=tf.float32, shape=INPUT_SHAPE)
     y_true = K.placeholder(shape=(OUTPUT_DIM, ))
-    loss = K.categorical_crossentropy(y_true, model(x_in)[0], from_logits=True)
-    grad = K.gradients(loss, x_in)
+    loss = K.categorical_crossentropy(y_true, model.output, from_logits=True)
+    grad = K.gradients(loss, model.input)
 
-    return K.function([x_in, y_true, K.learning_phase()], grad)
+    return K.function([model.input, y_true, K.learning_phase()], grad)
+
+
+def gradient_fn(model):
+    """Return gradient function of cross entropy loss w.r.t. input"""
+
+    y_true = K.placeholder(shape=(OUTPUT_DIM, ))
+    loss = K.categorical_crossentropy(y_true, model.output, from_logits=True)
+    grad = K.gradients(loss, model.input)
+
+    return K.function([model.input, y_true, K.learning_phase()], grad)
 
 
 def gradient_input(grad_fn, x, y):
