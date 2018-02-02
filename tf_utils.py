@@ -2,7 +2,7 @@ import keras.backend as K
 import numpy as np
 import tensorflow as tf
 from tensorflow.python.platform import flags
-from attack_utils import gen_adv_loss
+from lib.keras_utils import gen_adv_loss
 from keras.models import save_model
 from keras.preprocessing.image import ImageDataGenerator
 

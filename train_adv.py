@@ -4,7 +4,7 @@ from tensorflow.python.platform import flags
 from keras.models import save_model
 
 from tf_utils import tf_train, tf_test_error_rate
-from attacks import symbolic_fgs, symb_iter_fgs
+from lib.attacks import symbolic_fgs, symb_iter_fgs
 from os.path import basename
 
 from lib.keras_utils import *
@@ -21,6 +21,8 @@ def main():
     flags.DEFINE_bool('NUM_EPOCHS', args.epochs, 'Number of epochs')
 
     # Get MNIST test data
+    TRAIN_FILE_NAME = 'train_extended_75.p'
+
     x_train, y_train, x_val, y_val, x_test, y_test = load_dataset_GTSRB(
     n_channel=N_CHANNEL, train_file_name=TRAIN_FILE_NAME)
 
