@@ -11,6 +11,7 @@ parameters*
 save*
 nohup*
 fig/
+tmp/
 
 # OS generated files #
 ######################

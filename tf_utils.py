@@ -1,18 +1,20 @@
+import sys
+import time
+
 import keras.backend as K
 import numpy as np
 import tensorflow as tf
-from tensorflow.python.platform import flags
-from lib.keras_utils import gen_adv_loss
 from keras.models import save_model
 from keras.preprocessing.image import ImageDataGenerator
-
-import time
-import sys
+from lib.keras_utils import gen_adv_loss
+from parameters import BATCH_SIZE
+from tensorflow.python.platform import flags
 
 FLAGS = flags.FLAGS
 EVAL_FREQUENCY = 1000
-BATCH_SIZE = 64
+# BATCH_SIZE = 64
 BATCH_EVAL_NUM = 100
+
 
 def batch_eval(tf_inputs, tf_outputs, numpy_inputs):
     """
@@ -59,10 +61,9 @@ def batch_eval(tf_inputs, tf_outputs, numpy_inputs):
     return out
 
 
-def tf_train(x, y, model, X_train, Y_train, x_advs=None, benign = None, cross_lip=None):
-    
-    generator = ImageDataGenerator()
+def tf_train(x, y, model, X_train, Y_train, x_advs=None, benign=None, cross_lip=None):
 
+    generator = ImageDataGenerator()
     generator.fit(X_train)
 
     old_vars = set(tf.global_variables())
@@ -70,26 +71,21 @@ def tf_train(x, y, model, X_train, Y_train, x_advs=None, benign = None, cross_li
 
     # Generate cross-entropy loss for training
     logits = model(x)
-    #print(K.int_shape(logits))
     preds = K.softmax(logits)
     l1 = gen_adv_loss(logits, y, mean=True)
 
     # add adversarial training loss
     if x_advs is not None:
-        idx = tf.placeholder(dtype=np.int32)
-        logits_adv = model(tf.stack(x_advs)[idx])
-        l2 = gen_adv_loss(logits_adv, y, mean=True)
+        l2 = gen_adv_loss(logits, y, mean=True)
         if benign == 0:
             loss = l2
         elif benign == 1:
-            loss = 0.5*(l1+l2)
+            loss = 0.5 * (l1 + l2)
     else:
         l2 = tf.constant(0)
         loss = l1
 
     optimizer = tf.train.AdamOptimizer().minimize(loss)
-
-    saver = tf.train.Saver(set(tf.global_variables()) - old_vars)
 
     # Run all the initializers to prepare the trainable parameters.
     K.get_session().run(tf.initialize_variables(
@@ -98,7 +94,8 @@ def tf_train(x, y, model, X_train, Y_train, x_advs=None, benign = None, cross_li
     print('Initialized!')
 
     # Loop through training steps.
-    num_steps = int(FLAGS.NUM_EPOCHS * train_size + BATCH_SIZE - 1) // BATCH_SIZE
+    num_steps = int(FLAGS.NUM_EPOCHS * train_size +
+                    BATCH_SIZE - 1) // BATCH_SIZE
 
     step = 0
     training_loss = 0
@@ -116,11 +113,6 @@ def tf_train(x, y, model, X_train, Y_train, x_advs=None, benign = None, cross_li
                      y: batch_labels,
                      K.learning_phase(): 1}
 
-        # choose source of adversarial examples at random
-        # (for ensemble adversarial training)
-        if x_advs is not None:
-            feed_dict[idx] = np.random.randint(len(x_advs))
-
         # Run the graph
         _, curr_loss, curr_l1, curr_l2, curr_preds, _ = \
             K.get_session().run([optimizer, loss, l1, l2, preds]
@@ -133,22 +125,21 @@ def tf_train(x, y, model, X_train, Y_train, x_advs=None, benign = None, cross_li
             epoch_count += 1
             elapsed_time = time.time() - start_time
             start_time = time.time()
-            print('Step %d (epoch %.2f), %.2f s' %
-                (step, float(step) * BATCH_SIZE / train_size,
-                 elapsed_time))
-            print('Training loss: %.3f' % (training_loss/(step - step_old)))
+            print('Step %d (epoch %d), %.2f s' %
+                  (step, epoch_count, elapsed_time))
+            print('Training loss: %.3f' % (training_loss / (step - step_old)))
             training_loss = 0
             step_old = step
-            print('Minibatch loss: %.3f (%.3f, %.3f)' % (curr_loss, curr_l1, curr_l2))
+            print('Minibatch loss: %.3f (%.3f, %.3f)' %
+                  (curr_loss, curr_l1, curr_l2))
 
             _, _, minibatch_error = error_rate(curr_preds, batch_labels)
 
             print('Minibatch error: %.1f%%' % minibatch_error)
 
-        # if epoch % 10 == 0 or (step == (num_steps-1)):
-        #     save_path = saver.save(K.get_session(), "/tmp/model.ckpt")
-        #     save_model(model, 'tmp/model.ckpt')
-        #     print("Model saved in file: %s" % 'model.ckpt')
+            # Save model every epoch
+            save_model(model, './tmp/model_epoch{}_loss{}.ckpt'.format(
+                epoch_count, curr_loss))
 
         sys.stdout.flush()
 

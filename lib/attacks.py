@@ -426,6 +426,7 @@ def symbolic_fgs(x, grad, eps=0.3, clipping=True):
 
     if clipping:
         adv_x = K.clip(adv_x, 0, 1)
+
     return adv_x
 
 
@@ -433,8 +434,9 @@ def symbolic_fg(x, grad, eps=0.3, clipping=True):
     """
     FG attack
     """
+
     # Unit vector in direction of gradient
-    reduc_ind = list(xrange(1, len(x.get_shape())))
+    reduc_ind = list(range(1, len(x.get_shape())))
     normed_grad = grad / tf.sqrt(tf.reduce_sum(tf.square(grad),
                                                reduction_indices=reduc_ind,
                                                keep_dims=True))
