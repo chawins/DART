@@ -1,3 +1,8 @@
+"""
+An additional utility file used for adversarial training.
+Author: Arjun Bhagoji (abhagoji@princeton.edu)
+"""
+
 import sys
 import time
 
@@ -12,7 +17,6 @@ from tensorflow.python.platform import flags
 
 FLAGS = flags.FLAGS
 EVAL_FREQUENCY = 1000
-# BATCH_SIZE = 64
 BATCH_EVAL_NUM = 100
 
 
@@ -138,7 +142,7 @@ def tf_train(x, y, model, X_train, Y_train, x_advs=None, benign=None, cross_lip=
             print('Minibatch error: %.1f%%' % minibatch_error)
 
             # Save model every epoch
-            save_model(model, './tmp/model_epoch{}_loss{}.ckpt'.format(
+            save_model(model, './tmp/model_epoch{}_loss{:.3f}.ckpt'.format(
                 epoch_count, curr_loss))
 
         sys.stdout.flush()

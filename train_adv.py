@@ -1,3 +1,8 @@
+"""
+A run script to start adversarial training.
+"""
+
+import os
 from os.path import basename
 
 import keras
@@ -5,11 +10,16 @@ from keras import backend as K
 from keras.models import save_model
 from lib.attacks import symb_iter_fgs, symbolic_fgs
 from lib.keras_utils import *
+from lib.tf_utils import tf_test_error_rate, tf_train
 from lib.utils import *
 from parameters import *
 from tensorflow.python.platform import flags
-from tf_utils import tf_test_error_rate, tf_train
 
+os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+
+# Specify training set to load from ithin DATA_DIR
+TRAIN_FILE_NAME = 'train_extended_75.p'
 FLAGS = flags.FLAGS
 
 
@@ -20,21 +30,17 @@ def main():
     flags.DEFINE_bool('NUM_EPOCHS', args.epochs, 'Number of epochs')
 
     # Get MNIST test data
-    TRAIN_FILE_NAME = 'train_extended_75.p'
-    x_train, y_train, x_val, y_val, x_test, y_test = load_dataset_GTSRB(
+    x_train, y_train, _, _, x_test, y_test = load_dataset_GTSRB(
         n_channel=N_CHANNEL, train_file_name=TRAIN_FILE_NAME)
 
     # Convert to one-hot encoding
     y_train = keras.utils.to_categorical(y_train, NUM_LABELS)
     y_test = keras.utils.to_categorical(y_test, NUM_LABELS)
-    y_val = keras.utils.to_categorical(y_val, NUM_LABELS)
 
     x = K.placeholder(shape=(None, HEIGHT, WIDTH, N_CHANNEL))
     y = K.placeholder(shape=(BATCH_SIZE, NUM_LABELS))
 
     eps = args.eps
-    norm = args.norm
-
     x_advs = [None]
 
     model = build_mltscl()
@@ -53,6 +59,7 @@ def main():
     test_error = tf_test_error_rate(model, x, x_test, y_test)
     print(test_error)
 
+    # Specify model name
     model_name = './tmp/multiscale_adv'
     save_model(model, model_name)
     json_string = model.to_json()
