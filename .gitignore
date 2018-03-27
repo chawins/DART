@@ -4,13 +4,13 @@ input_data/
 .vscode
 *_tmp.py
 test_*
-*.png
 Stop_Sign_Dataset/
-parameters*
 save*
 nohup*
 fig/
 tmp/
+vis*
+physical_adv/
 
 # OS generated files #
 ######################
