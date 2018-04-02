@@ -35,17 +35,20 @@ class OptCarlini:
             global_step = tf.Variable(0, trainable=False)
             # decay_lr = tf.train.exponential_decay(
             #   self.lr, global_step, 500, 0.95, staircase=True)
-            decay_lr = tf.train.inverse_time_decay(
-                self.lr, global_step, 10, 0.01)
+            if self.decay:
+                lr = tf.train.inverse_time_decay(
+                    self.lr, global_step, 10, 0.01)
+            else:
+                lr = self.lr
             # Use Adam optimizer
             self.optimizer = tf.train.AdamOptimizer(
-                learning_rate=decay_lr, beta1=0.9, beta2=0.999, epsilon=1e-08)
+                learning_rate=lr, beta1=0.9, beta2=0.999, epsilon=1e-08)
             self.opt = self.optimizer.minimize(
                 self.f, var_list=self.var_list, global_step=global_step)
 
     def __init__(self, model, target=True, c=1, lr=0.01, init_scl=0.1,
                  use_bound=False, loss_op=0, k=5, var_change=True,
-                 use_mask=True):
+                 use_mask=True, decay=True):
         """
         Initialize the optimizer. Default values of the parameters are
         recommended and decided specifically for attacking traffic sign
@@ -92,10 +95,13 @@ class OptCarlini:
         self.target = target
         self.c = c
         self.lr = lr
+        self.init_scl = init_scl
         self.use_bound = use_bound
         self.loss_op = loss_op
         self.k = k
+        self.var_change = var_change
         self.use_mask = use_mask
+        self.decay = decay
 
         # Initialize variables
         init_val = np.random.normal(scale=init_scl, size=INPUT_SHAPE)
@@ -157,7 +163,7 @@ class OptCarlini:
         # Call a helper function to finalize and set up optimizer
         self._setup_opt()
 
-    def optimize(self, x, y, n_step=1000, prog=True, mask=None):
+    def optimize(self, x, y, weights_path, n_step=1000, prog=True, mask=None):
         """
         Run optimization attack, produce adversarial example from a single
         sample, x.
@@ -186,11 +192,19 @@ class OptCarlini:
 
             # Initialize variables and load weights
             sess.run(tf.global_variables_initializer())
-            self.model.load_weights(WEIGTHS_PATH)
+            self.model.load_weights(weights_path)
 
             # Ensure that shape is correct
             x_ = np.copy(x).reshape(INPUT_SHAPE)
             y_ = np.copy(y).reshape((1, OUTPUT_DIM))
+
+            if self.var_change:
+                # Initialize w = arctanh( 2(x + noise) - 1 )
+                init_rand = np.random.normal(
+                    -self.init_scl, self.init_scl, size=INPUT_SHAPE)
+                # Clip values to remove numerical error atanh(1) or atanh(-1)
+                tanh_w = np.clip((x_ + init_rand) * 2 - 1, -1 + EPS, 1 - EPS)
+                self.w.load(np.arctanh(tanh_w))
 
             # Include mask in feed_dict if mask is used
             if self.use_mask:

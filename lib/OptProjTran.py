@@ -185,7 +185,6 @@ class OptProjTran:
         self.x_rs = tf.map_fn(resize, (self.x_b, up_size), dtype=tf.float32)
 
         model_output = self.model(self.x_rs)
-        self.model_output = model_output
 
         if loss_op == 0:
             # Carlini l2-attack's loss
@@ -321,14 +320,12 @@ class OptProjTran:
             sess.run(tf.global_variables_initializer())
             self.model.load_weights(WEIGTHS_PATH)
             if self.var_change:
-                # Initialize w here to be within L1-ball center at rctanh(2x-1)
-                init_rand = np.random.uniform(
+                # Initialize w = arctanh( 2(x + noise) - 1 )
+                init_rand = np.random.normal(
                     -self.init_scl, self.init_scl, size=INPUT_SHAPE)
                 # Clip values to remove numerical error atanh(1) or atanh(-1)
-                tanhw = np.clip(x_ * 2 - 1, -1 + EPS, 1 - EPS)
-                init_w = np.arctanh(tanhw) + init_rand
-                self.w.load(init_w)
-                # self.w.load(init_rand)
+                tanhw = np.clip((x_ + init_rand) * 2 - 1, -1 + EPS, 1 - EPS)
+                self.w.load(np.arctanh(tanhw))
 
             # Set up some variables for early stopping
             min_norm = float("inf")
