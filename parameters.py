@@ -31,12 +31,20 @@ from tensorflow.contrib.opt import ScipyOptimizerInterface
 # OUTPUT_DIM = 10                             # Number of output dimension
 
 # Set constants (GTSRB)
-NUM_LABELS = 43                             # Number of labels
+# NUM_LABELS = 43                             # Number of labels
+# BATCH_SIZE = 32                             # Size of batch
+# HEIGHT = 32                                 # Height of input image
+# WIDTH = 32                                  # Width of input image
+# N_CHANNEL = 3                               # Number of channels
+# OUTPUT_DIM = 43                             # Number of output dimension
+
+# Set constants (DAVE)
+NUM_LABELS = 1                              # Number of labels
 BATCH_SIZE = 32                             # Size of batch
-HEIGHT = 32                                 # Height of input image
-WIDTH = 32                                  # Width of input image
+HEIGHT = 66                                 # Height of input image
+WIDTH = 200                                 # Width of input image
 N_CHANNEL = 3                               # Number of channels
-OUTPUT_DIM = 43                             # Number of output dimension
+OUTPUT_DIM = 1                              # Number of output dimension
 
 # Set training hyperparameters
 NUM_EPOCH = 100                             # Number of epoch to train
@@ -45,7 +53,7 @@ L2_LAMBDA = 0.0001                          # Lambda for l2 regularization
 
 # Set paths
 # Path to saved weights
-WEIGTHS_PATH = "./keras_weights/weights_mltscl_dataaug.hdf5"
+WEIGTHS_PATH = "./keras_weights/dave_rgb.best.h5"
 # Path to directory containing dataset
 DATA_DIR = "./input_data/"
 

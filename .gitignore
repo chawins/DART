@@ -10,6 +10,7 @@ nohup*
 fig/
 tmp/
 vis*
+data/
 physical_adv/
 
 # OS generated files #
